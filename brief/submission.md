@@ -48,4 +48,4 @@ The clocks go back in the night to Sunday (03:00 becomes 02:00): every Sunday ti
   links to its replay. Pick one negotiation and walk us through it.
 - Questions to expect: Why did your agent write that? Would it have worked on a real supplier? What
   did your agent learn about suppliers, and from where?
-- ⟦PLACEHOLDER: how the Live Final score and the jury combine for places 1-3, and the judging rubric⟧
+- **Places 1-3:** the jury sets them among the top 5, from the Live Final score and the pitch.

@@ -199,16 +199,15 @@ sessions per key) - the kit's `arena run --set final` does that. The leaderboard
 so far, wave by wave; replays and the suppliers' back office appear after the final. A case broken on our side is replayed.
 
 The hidden cases share the world, case types and rules of the practice set, with new suppliers and
-settings. **Up to a third of them combine supplier types and case types that practice never shows**
-- no new rules, but an agent that memorised the practice suppliers will meet strangers. Some cite
+settings. **None of them repeats a practice case** - mostly suppliers, parts and situations practice never
+shows. No new rules, but an agent that memorised the practice suppliers will meet strangers. Some cite
 the Sunday release.
 
 ## 9. Selection and prizes
 
 - **Top 5:** the 5 teams with the most points after the five waves pitch to the jury at 15:10 at the
   Tacto office: 5 minutes + 2 minutes of questions. Every replay is open to the jury.
-- **Places 1-3:** ⟦PLACEHOLDER: how the Live Final score and the jury combine, and the judging rubric
-  (draft: approach, explainability, craft)⟧.
+- **Places 1-3:** the jury sets them among the top 5, from the Live Final score and the pitch.
 - **Ties:** points are points; an exact tie goes to more deals, then fewer rounds. At the top-5
   cut the jury looks at the score distribution. **Prizes:** robots, caps and a small extra, handed
   over at the awards at 16:20.

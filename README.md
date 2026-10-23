@@ -100,7 +100,8 @@ Details: [brief/submission.md](brief/submission.md).
 
 ## Prizes
 
-Robots, caps and a small extra. ⟦PLACEHOLDER: how the Live Final score and the jury combine for places 1-3⟧
+Robots, caps and a small extra. The Live Final decides who pitches (the top 5); the jury sets places 1-3
+from the final score and the pitch.
 
 ## What is in this repo
 
