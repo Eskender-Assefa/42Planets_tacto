@@ -63,8 +63,8 @@ move on other terms.
 You bring your own LLM access; we only run the suppliers. Data and docs are CC BY 4.0, code MIT.
 
 **Your key - one per team.** Open `https://arena.tacto.ai/apply`, enter your team name and a contact e-mail,
-and show the match code it displays at the Tacto desk. Once we approve, the key appears **once**
-on that page: copy it, press "Got the key". Only that page shows it; lost it - we reset it.
+and show the match code it displays at the Tacto desk. Once we approve, the key appears
+on that page: copy it, press "Got the key" - it stays there. Only that page shows it; lost it - we reset it.
 Tip: your team name may start with one emoji - it shows on the big screen (optional; nothing offensive).
 
 **Practice quota: 200 practice sessions per team per rolling 24 hours.** `GET /v1/me` shows what

@@ -27,7 +27,7 @@ You need Python 3.12, [uv](https://docs.astral.sh/uv/) and git.
 1. **Apply.** Open **https://arena.tacto.ai/apply** and enter your team name and a contact e-mail.
    Tip: start the name with one emoji, it shows on the big screen.
 2. **Show your match code at the Tacto desk.** We approve.
-3. **Copy your key.** It appears **once** on the page you applied on; then press "Got the key". One key
+3. **Copy your key.** It appears on the page you applied on and stays there; press "Got the key". One key
    per team. Lost it? We reset it at the desk.
 4. **Run the four commands.**
 

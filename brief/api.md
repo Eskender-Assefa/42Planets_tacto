@@ -35,8 +35,8 @@ GET  /v1/sessions/{sid}                              state; after the end score 
 
 One key per team - a licence. Get it on the page `https://arena.tacto.ai/apply`: enter your team name and a
 contact e-mail, show the match code the page displays at the Tacto desk, and once an organiser
-approves, the key appears **once** on that page - copy it and press "Got the key". Only that page
-(or its link) shows the key; lost it → ask the organisers to reset it (the old key stops at once).
+approves, the key appears on that page - copy it and press "Got the key"; it stays there. Only that page
+(or its link, in the same browser) shows the key; lost it → ask the organisers to reset it (the old key stops at once).
 
 Send the key as `X-API-Key` with every call. A missing or unknown key is a `401`; a paused or
 revoked key gets `403 "this key is paused - ask the organisers"` (or `revoked`) on every call.
