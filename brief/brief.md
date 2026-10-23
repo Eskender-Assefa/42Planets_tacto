@@ -51,11 +51,11 @@ supplier, not stacking evidence - and finding the trade it wants: a supplier sho
 more about when it is paid than about the price; one that cannot touch its list price may still
 move on other terms.
 
-## 3. What you get (Sat 10:00)
+## 3. What you get (at the kickoff)
 
 | What | Where |
 |---|---|
-| This brief, the API docs (`api.md`) and the submission guide (`submission.md`) | `https://github.com/tacto-ai/negotiation-arena-kit`, folder `brief/` |
+| This brief, the API docs (`api.md`) and the submission guide (`submission.md`) | `https://github.com/tacto-playground/negotiation-arena-kit`, folder `brief/` |
 | **Data package v1**: CSV, the same data as SQLite, `facts.json` (every citable ID with the values the arena checks), contracts, letters, e-mails, meeting and call notes - the data behind all 19 practice cases | `https://arena.tacto.ai/v1/data/package.zip`, or the repo's `data/` |
 | **Practice arena**: 10 hosted practice cases, picked so every case type shows up; a replay after every case; practice leaderboard; a **sandbox** with 3 demo suppliers | `https://arena.tacto.ai` with your team's key - apply at `https://arena.tacto.ai/apply` (below) |
 | **Starter kit**: Python client, a naive agent, an LLM agent that writes e-mails and reads the attached documents, the Live Final runner, an MCP server over the data, `arena-sim` - the API on your laptop | the repo's `starter-kit/` - first agent on the board in 15 minutes |
@@ -69,7 +69,7 @@ Tip: your team name may start with one emoji - it shows on the big screen (optio
 
 **Practice quota: 200 practice sessions per team per rolling 24 hours.** `GET /v1/me` shows what
 you have used and when it frees up. The build page `https://arena.tacto.ai/live` shows every team's quota use,
-practice records and highlights from Sat 10:00 to Sun 12:00.
+practice records and highlights from the kickoff to the code freeze.
 
 **`arena-sim`** speaks the arena's API exactly, with one plain scripted supplier: get your plumbing
 right there. It teaches the contract, not the suppliers - and we don't hand out our suppliers. Want
@@ -168,9 +168,9 @@ The same €41.60 for 12 months covers half your need; the rest counts at the fa
    score came about, and the jury may weigh that in the pitches. The goal is to convince a
    realistic supplier: that is what carries over to real negotiations.
 3. **One attempt per case** in the final. An abandoned case is no deal.
-4. **Code freeze at Sun 12:00.** Submit on ehl.gg: your repo (the agent and a README to run it), the
-   commit hash, a short description and your pitch slides (`submission.md`). The final runs that
-   commit, so your agent must be running and polling before 12:00. We check the top 10 for later
+4. **Code freeze at Sun 13:00.** Submit on the organisers' platform: your repo (the agent and a README
+   to run it), the commit hash and a short description (`submission.md`). The final runs that commit
+   from 13:30, so your agent must be running and polling before then. We check the top 5 for later
    pushes. Run your agent where you like, with your own LLM keys.
 5. A supplier remembers only within a case; its history with your company is in the data.
 
@@ -178,17 +178,17 @@ The same €41.60 for 12 months covers half your need; the rest counts at the fa
 
 | When | What |
 |---|---|
-| Sat 10:00 | Kickoff and reveal: brief, data, kit, practice arena live |
-| Sat 12:00-13:00 | Deep dive (ground floor, room on the signs): data, API, kit, Q&A - challenge selection closes 13:00 |
-| Sat afternoon | Office hours at the Tacto table; practice all weekend |
-| Sat ⟦TIME⟧ | Tacto stops answering for the night (Discord: https://discord.gg/hPwFfbWRV) |
+| Sat 10:30 | Kickoff at the Tacto office: brief, data, kit, practice arena live |
+| Sat 12:00 | Hacking starts at MUCL; practice all weekend, overnight included |
+| Sat from 14:00 | Office hours at MUCL: the Tacto team answers your questions |
 | Sun 08:00 | **Sunday release:** new market news and letters (`/v1/data`) |
-| Sun 09:00 | **Pre-flight:** one practice case through your final setup |
-| Sun 12:00-~12:58 | **Code + slides freeze**, then the **Live Final** in 5 waves |
-| Sun 13:00-14:30 | Top 10 pitch to the Tacto jury (5 min pitch + 2 min questions) |
-| Sun 14:30 | Track winners and the two finalists announced |
-| Sun 15:30 | Grand Final pitches (AudiMax) |
-| Sun 16:30 | Awards |
+| Sun morning | **Pre-flight:** one practice case through your final setup |
+| Sun 13:00 | **Code freeze** |
+| Sun 13:30-14:30 | **Live Final** in 5 waves (MUCL) |
+| Sun 15:10-16:10 | Top 5 pitch to the jury at the Tacto office (5 min pitch + 2 min questions) |
+| Sun 16:20 | Awards |
+
+The clocks go back in the night to Sunday (03:00 becomes 02:00): every Sunday time is the new time (CET).
 
 **The Live Final.** The hidden cases come in **5 themed waves**. The host shows each wave's
 theme on the big screen, then starts the wave; its cases appear at the start, for all teams at once,
@@ -205,16 +205,13 @@ the Sunday release.
 
 ## 9. Selection and prizes
 
-- **Top 10:** the 10 teams with the most points after the five waves pitch to our jury from 13:00:
-  5 minutes + 2 minutes of questions. Every replay is open to the jury.
-- **Track places 1-3** (open to all teams of the track): ⟦PLACEHOLDER - decided Sat morning:
-  weighting of Live Final score vs. jury score, and the jury criteria (draft: approach,
-  explainability, craft)⟧.
-- **EHL Grand Final:** the best 2 of the 5 EHL finalist teams in this track go on to the Grand Final
-  pitches. Finalist teams outside the top 10 are ranked by the Live Final score alone.
-- **Ties:** points are points; an exact tie goes to more deals, then fewer rounds. At the top-10
-  cut the jury looks at the score distribution. **Prizes:** €1,500 for 1st place, medals for the
-  top 3, handed over by Tacto at the awards at 16:30.
+- **Top 5:** the 5 teams with the most points after the five waves pitch to the jury at 15:10 at the
+  Tacto office: 5 minutes + 2 minutes of questions. Every replay is open to the jury.
+- **Places 1-3:** ⟦PLACEHOLDER: how the Live Final score and the jury combine, and the judging rubric
+  (draft: approach, explainability, craft)⟧.
+- **Ties:** points are points; an exact tie goes to more deals, then fewer rounds. At the top-5
+  cut the jury looks at the score distribution. **Prizes:** robots, caps and a small extra, handed
+  over at the awards at 16:20.
 
 ## 10. Tips
 

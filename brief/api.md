@@ -49,7 +49,7 @@ Where your team stands:
 
 ```json
 {"team_name": "Haggle Hounds", "status": "active",
- "practice": {"used": 37, "left": 163, "limit": 200, "resets_at": "2026-10-11T09:42:10+00:00"},
+ "practice": {"used": 37, "left": 163, "limit": 200, "resets_at": "2026-10-24T13:42:10+00:00"},
  "best": {"case:P01": 0.71, "case:P04": 0.55}}
 ```
 `practice`: sessions used and left in the rolling 24 hours, and when the oldest of them ages out
@@ -133,7 +133,7 @@ ended - in the final after the final; before that `403`.
 
 - `GET /health` - is the arena up? No key needed.
 - `GET /v1/data` - the data downloads, no key needed: `{"package": {"url": "/v1/data/package.zip"},
-  "release-sunday": {"public": false, "at": "2026-10-11T06:00:00+00:00"}}`. Once the Sunday
+  "release-sunday": {"public": false, "at": "2026-10-25T07:00:00+00:00"}}`. Once the Sunday
   release is public it carries `"url": "/v1/data/release-sunday.zip"` - new news, letters and a
   memo, with their own `facts.json` (new IDs only; package v1 stays as it is). Hidden cases may
   cite them; practice cases stay on package v1.
@@ -170,7 +170,7 @@ ended - in the final after the final; before that `403`.
   `cases` - `case_id`, `title`, `type`, `suppliers` (names), `status` (`not started`, `in play`,
   `deal`, `no deal`; `not played` once its wave has closed - it scores your alternative), `end_reason`,
   `score`, `saved_eur`, `rounds`, and after the final `replay_url`. Both cached for 5 seconds.
-- `GET /live` - the build page, no key needed (Sat 10:00 - Sun 12:00): every team's quota use,
+- `GET /live` - the build page, no key needed (from the kickoff to the code freeze): every team's quota use,
   practice records and highlights.
 - `GET /replay/{sid}` (link in the session's `replay_url`): a finished negotiation step by step -
   every e-mail and the supplier's reasons for each move in words, the same view in every set.
