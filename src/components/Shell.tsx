@@ -38,7 +38,7 @@ export function Shell({ children }: { children: ReactNode }) {
   );
 }
 
-export function MindsetBadge({ m }: { m?: string | null }) {
+export function MindsetBadge({ m }: { m?: string | null | undefined }) {
   if (!m) return <span className="label-caps">—</span>;
   const cls =
     m === "Stalled"
