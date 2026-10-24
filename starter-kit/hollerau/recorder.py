@@ -20,7 +20,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import cast, get_args
 
-from arena_kit.client import ArenaClient
+from arena_kit.client import ArenaClient, ArenaError
 from arena_kit.play import RemoteTable
 
 from .db import DBError, SupabaseDB
@@ -130,7 +130,16 @@ class RecordingTable(RemoteTable):  # upstream RemoteTable is unannotated: super
                 log.warning("accept of %s swapped to the standing sheet %s", action.get("term_sheet_id"), main_id)
                 action["term_sheet_id"] = main_id
         clean = self._log_move(supplier_id, message, "accept" if kind == "accept" else "walk_away")
-        return cast(JSONObject, super().close(supplier_id, clean))  # type: ignore[no-untyped-call]
+        try:
+            return cast(JSONObject, super().close(supplier_id, clean))  # type: ignore[no-untyped-call]
+        except ArenaError as e:
+            # The offer stopped standing between our view and the accept (P05, factors run: the
+            # thread had timed out and closed silently). A 422 would make play() drop the whole
+            # case; as a 409 play() re-reads the thread and lets the agent decide again.
+            if e.status == 422 and "standing offer" in str(e.detail):
+                log.warning("%s: %s - re-reading the thread and deciding again", supplier_id, e.detail)
+                raise ArenaError(409, f"offer no longer standing: {e.detail}") from e
+            raise
 
     def finish(self, result: JSONObject) -> None:
         """Store the case's outcome. Called by the runner after play() returns."""
