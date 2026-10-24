@@ -1,53 +1,93 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { Shell, MindsetBadge, StatusDot } from "@/components/Shell";
-import { useCases, eur, clock, envelopeScore, type CaseRow } from "@/lib/command";
+import { useCaseOverview, useSuppliers, supplierNames, eur, clock, scoreLabel, secondsRemaining } from "@/lib/command";
+import type { CaseOverview, Environment } from "@/integrations/hollerau/types";
 
 export const Route = createFileRoute("/wave")({
   head: () => ({
     meta: [
       { title: "Live Wave Terminal · Hollerau Agentic Command" },
-      { name: "description", content: "Ten parallel negotiation cards with countdowns, cost envelopes and supplier mindset." },
+      { name: "description", content: "Parallel negotiation cards with countdowns, live offers and supplier mindset." },
       { property: "og:title", content: "Live Wave Terminal · Hollerau Agentic Command" },
-      { property: "og:description", content: "Ten parallel negotiation cards with countdowns, cost envelopes and supplier mindset." },
+      { property: "og:description", content: "Parallel negotiation cards with countdowns, live offers and supplier mindset." },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary" },
     ],
   }),
   component: Wave,
 });
 
+const ENVIRONMENTS: Environment[] = ["sim", "practice", "final"];
 const MAX_SECONDS = 600;
 
 function Wave() {
-  const { data = [] } = useCases();
+  const [env, setEnv] = useState<Environment | null>(null);
+  const [wave, setWave] = useState<number | null>(null);
+  const { query, latestEnvironment } = useCaseOverview(env, wave);
+  const suppliers = useSuppliers();
+  const data = query.data ?? [];
+  const activeEnv = env ?? latestEnvironment;
+  const waves = [...new Set(data.map((c) => c.wave).filter((w): w is number => w != null))].sort((a, b) => a - b);
+
   return (
     <Shell>
-      <div className="mb-6 flex items-end justify-between">
+      <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
         <div>
-          <div className="label-caps">Wave 1 · parallel 10</div>
+          <div className="label-caps">Wave terminal · {activeEnv ?? "…"}</div>
           <h1 className="mt-1 text-3xl font-semibold tracking-tight">Live Wave Terminal</h1>
         </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {ENVIRONMENTS.map((e) => (
+            <button
+              key={e}
+              onClick={() => setEnv(e)}
+              className={`border px-3 py-1.5 num text-xs uppercase tracking-wider ${activeEnv === e ? "border-primary text-primary" : "border-border text-muted-foreground hover:text-foreground"}`}
+            >
+              {e}
+            </button>
+          ))}
+          <span className="mx-1 h-4 w-px bg-border" />
+          <button
+            onClick={() => setWave(null)}
+            className={`border px-3 py-1.5 num text-xs uppercase tracking-wider ${wave == null ? "border-primary text-primary" : "border-border text-muted-foreground hover:text-foreground"}`}
+          >
+            All
+          </button>
+          {waves.map((w) => (
+            <button
+              key={w}
+              onClick={() => setWave(w)}
+              className={`border px-3 py-1.5 num text-xs uppercase tracking-wider ${wave === w ? "border-primary text-primary" : "border-border text-muted-foreground hover:text-foreground"}`}
+            >
+              W{w}
+            </button>
+          ))}
+        </div>
       </div>
+
+      {!query.isLoading && data.length === 0 && (
+        <div className="panel p-10 text-center text-muted-foreground">No cases yet — start the runner.</div>
+      )}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-        {data.map((c) => <WaveCard key={c.session_id} c={c} />)}
+        {data.map((c) => <WaveCard key={c.session_id} c={c} suppliers={suppliers.data} />)}
       </div>
     </Shell>
   );
 }
 
-function WaveCard({ c }: { c: CaseRow }) {
-  const active = c.status === "Active";
-  const [secs, setSecs] = useState(c.seconds_left);
-  useEffect(() => setSecs(c.seconds_left), [c.seconds_left]);
+function WaveCard({ c, suppliers }: { c: CaseOverview; suppliers: ReturnType<typeof useSuppliers>["data"] }) {
+  const active = c.status === "active";
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!active) return;
-    const t = setInterval(() => setSecs((s) => Math.max(0, s - 1)), 1000);
+    const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, [active]);
 
-  const open = Number(c.c_open), cur = Number(c.c_current_offer), floor = Number(c.c_best_floor);
-  const score = active ? envelopeScore(open, cur, floor) : Number(c.final_score ?? c.current_score);
-  const critical = active && secs < 60;
-  const stalled = c.mindset === "Stalled";
+  const secs = secondsRemaining(c, now);
+  const critical = active && secs != null && secs < 60;
+  const stalled = c.last_mindset === "Stalled";
 
   return (
     <Link
@@ -57,36 +97,36 @@ function WaveCard({ c }: { c: CaseRow }) {
     >
       <div className="flex items-start justify-between gap-2">
         <div>
-          <div className="font-semibold leading-tight">{c.supplier?.name}</div>
-          <div className="mt-0.5 text-xs text-muted-foreground">{c.supplier?.segment} · {c.supplier?.country}</div>
+          <div className="font-semibold leading-tight">{c.title ?? c.case_id}</div>
+          <div className="mt-0.5 text-xs text-muted-foreground">{supplierNames(c, suppliers)}</div>
         </div>
         <StatusDot s={c.status} />
       </div>
 
       <div>
         <div className="flex justify-between">
-          <span className="label-caps">Turn {c.turn_number}</span>
-          <span className={`num text-sm ${critical ? "text-destructive" : ""}`}>{clock(secs)}</span>
+          <span className="label-caps">Turn {c.last_turn ?? "—"}</span>
+          <span className={`num text-sm ${critical ? "text-destructive" : ""}`}>{secs == null ? "-" : clock(secs)}</span>
         </div>
         <div className="mt-1 h-1 bg-muted">
-          <div className={`h-full ${critical ? "bg-destructive" : "bg-primary"}`} style={{ width: `${Math.min(100, (secs / MAX_SECONDS) * 100)}%` }} />
+          <div
+            className={`h-full ${critical ? "bg-destructive" : "bg-primary"}`}
+            style={{ width: `${secs == null ? 0 : Math.min(100, (secs / MAX_SECONDS) * 100)}%` }}
+          />
         </div>
       </div>
 
       <div>
-        <div className="label-caps mb-1">Cost envelope</div>
-        <div className="relative h-2 bg-muted">
-          <div className="absolute inset-y-0 left-0 bg-success/70" style={{ width: `${score * 100}%` }} />
-        </div>
+        <div className="label-caps mb-1">Cost position</div>
         <div className="mt-1 flex justify-between num text-[10px] text-muted-foreground">
-          <span>{eur(open)}</span><span>{eur(floor)}</span>
+          <span>open {eur(c.c_open)}</span><span>best {eur(c.c_best)}</span>
         </div>
-        <div className="mt-2 num text-lg text-primary">{eur(cur)}</div>
+        <div className="mt-2 num text-lg text-primary">{eur(c.last_c_supplier_offer)}</div>
       </div>
 
       <div className="mt-auto flex items-center justify-between border-t border-border pt-3">
-        <MindsetBadge m={c.mindset} />
-        <span className="num text-2xl font-semibold">{score.toFixed(3)}</span>
+        <MindsetBadge m={c.last_mindset} />
+        <span className="num text-2xl font-semibold">{scoreLabel(c.score)}</span>
       </div>
     </Link>
   );

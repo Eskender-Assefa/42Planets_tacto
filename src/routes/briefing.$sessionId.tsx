@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { Shell } from "@/components/Shell";
-import { useCase, eur } from "@/lib/command";
+import { useCase, useSuppliers, supplierNames, eur } from "@/lib/command";
 
 export const Route = createFileRoute("/briefing/$sessionId")({
   head: ({ params }) => ({
@@ -10,6 +10,8 @@ export const Route = createFileRoute("/briefing/$sessionId")({
       { name: "description", content: "Listen to a spoken summary of how the agent structured its trade-offs." },
       { property: "og:title", content: `Voice Briefing ${params.sessionId} · Hollerau Agentic Command` },
       { property: "og:description", content: "Listen to a spoken summary of how the agent structured its trade-offs." },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary" },
     ],
   }),
   component: Briefing,
@@ -18,12 +20,13 @@ export const Route = createFileRoute("/briefing/$sessionId")({
 function Briefing() {
   const { sessionId } = Route.useParams();
   const { c, logs } = useCase(sessionId);
+  const suppliers = useSuppliers();
   const [playing, setPlaying] = useState(false);
   const k = c.data;
   const last = logs.data?.at(-1);
 
   const script = k && last
-    ? `Briefing for ${k.supplier?.name}, turn ${last.turn_number}. Opening cost was ${eur(k.c_open)}; the current offer stands at ${eur(k.c_current_offer)} against a floor of ${eur(k.c_best_floor)}. The supplier is ${last.supplier_mindset?.toLowerCase()}. ${last.observed_barrier} ${last.strategic_intent} ${last.mathematical_justification}`
+    ? `Briefing for ${supplierNames(k, suppliers.data)}, turn ${last.turn_number}. Opening cost was ${eur(k.c_open)}; the latest supplier offer stands at ${eur(k.last_c_supplier_offer)} against a best of ${eur(k.c_best)}. ${last.strategic_intent} ${last.mathematical_justification}`
     : "";
 
   // Temporary browser voice until the ElevenLabs key is connected.
@@ -42,7 +45,7 @@ function Briefing() {
       <Link to="/audit/$sessionId" params={{ sessionId }} className="num text-xs text-muted-foreground hover:text-foreground">← Audit</Link>
       <div className="mx-auto mt-8 max-w-2xl text-center">
         <div className="label-caps">D · Voice briefing room</div>
-        <h1 className="mt-2 text-4xl font-semibold tracking-tight">{k?.supplier?.name ?? "…"}</h1>
+        <h1 className="mt-2 text-4xl font-semibold tracking-tight">{k ? (k.title ?? k.case_id) : "…"}</h1>
         <button
           onClick={playing ? stop : play}
           disabled={!script}
@@ -50,7 +53,9 @@ function Briefing() {
         >
           {playing ? "Stop" : "Play"}
         </button>
-        <p className="panel mt-10 p-6 text-left leading-relaxed text-muted-foreground">{script || "Loading briefing…"}</p>
+        <p className="panel mt-10 p-6 text-left leading-relaxed text-muted-foreground">
+          {script || (logs.isLoading || c.isLoading ? "Loading briefing…" : "No turns logged yet — start the runner.")}
+        </p>
         <p className="mt-4 text-xs text-muted-foreground">Using the browser voice for now — ElevenLabs voice switches on once its key is added.</p>
       </div>
     </Shell>

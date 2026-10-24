@@ -1,0 +1,27 @@
+import { createClient } from "@supabase/supabase-js";
+import { HOLLERAU_SUPABASE_URL, HOLLERAU_SUPABASE_ANON_KEY } from "./config";
+import type { AuditLog, Case, CaseOverview, Supplier, WaveScore } from "./types";
+
+type ReadOnlyTable<R> = { Row: R & Record<string, unknown>; Insert: Record<string, unknown>; Update: Record<string, unknown>; Relationships: [] };
+
+type HollerauDatabase = {
+  __InternalSupabase: { PostgrestVersion: "14.18" };
+  public: {
+    Tables: {
+      suppliers: ReadOnlyTable<Supplier>;
+      cases: ReadOnlyTable<Case>;
+      audit_logs: ReadOnlyTable<AuditLog>;
+      case_overview: ReadOnlyTable<CaseOverview>;
+      wave_scores: ReadOnlyTable<WaveScore>;
+    };
+    Views: Record<string, never>;
+    Functions: Record<string, never>;
+    Enums: Record<string, never>;
+    CompositeTypes: Record<string, never>;
+  };
+};
+
+/** Read-only client for the Hollerau negotiation backend. The dashboard never writes. */
+export const hollerau = createClient<HollerauDatabase>(HOLLERAU_SUPABASE_URL, HOLLERAU_SUPABASE_ANON_KEY, {
+  auth: { persistSession: false, autoRefreshToken: false },
+});
