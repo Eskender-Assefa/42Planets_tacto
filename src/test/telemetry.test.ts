@@ -15,8 +15,9 @@ describe("Telemetry presentation rules", () => {
     expect(latencyLabel(6200)).toBe("6.2 s");
     expect(latencyLabel(null)).toBe("-");
   });
-  it("formats concession velocity as percent per round", () => {
-    expect(velocityLabel(0.004)).toBe("0.40% of C_open / round");
+  it("formats stored percent velocity without rescaling", () => {
+    expect(velocityLabel(1.97)).toBe("1.97% of C_open / round");
+    expect(velocityLabel(0.004)).toBe("0.00% of C_open / round");
   });
   it("assigns the requested protocol families", () => {
     expect(protocolTone("Leverage - Aggressive Protocol")).toBe("success");
