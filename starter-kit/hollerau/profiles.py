@@ -56,15 +56,6 @@ class FullCostConfig(TypedDict):
     use_lower_bound: bool
 
 
-class BluffConfig(TypedDict):
-    enabled: bool
-    bluff_pct: float  # how far below the supplier's offer the claimed competitor level sits
-    max_bluff_pct: float  # deepest claim when no floor estimate exists
-    ceiling_over_floor_pct: float  # never claim below floor estimate x (1 + this) (Bluffs.txt: C_best + 2 %)
-    verified_margin_pct: float  # a real anchor counts when this far below the offer
-    called_patterns: list[str]  # supplier wording that means "bluff called"
-
-
 class StrategyConfig(TypedDict):
     segments: dict[str, SegmentConfig]
     cultures: dict[str, CultureConfig]
@@ -72,7 +63,6 @@ class StrategyConfig(TypedDict):
     full_cost_estimate: FullCostConfig
     relationship_price_search: PriceSearchConfig
     telemetry: TelemetryConfig
-    bluff: BluffConfig
     llm: LLMConfig
 
 

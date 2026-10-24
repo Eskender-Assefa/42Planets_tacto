@@ -146,7 +146,6 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--agent", default="hollerau", choices=["hollerau", "naive"])
     ap.add_argument("--parallel", type=int, default=10)
     ap.add_argument("--waves", type=int, default=5)
-    ap.add_argument("--bluff", action="store_true", help="EXPERIMENT: competitor pressure, leverage cases only")
     ap.add_argument("-v", "--verbose", action="store_true")
     a = ap.parse_args(argv)
     logging.basicConfig(
@@ -171,7 +170,7 @@ def main(argv: list[str] | None = None) -> int:
             if not os.environ.get("ANTHROPIC_API_KEY"):
                 print("FAIL set ANTHROPIC_API_KEY in starter-kit/.env (or use --agent naive)")
                 return 1
-            new_agent: AgentFactory = new_agent_factory(Package(), bluff_mode=a.bluff or None)
+            new_agent: AgentFactory = new_agent_factory(Package())
             unreasoned = CLOSING_LABEL
         else:
             new_agent = lambda _deadline: NaiveAgent()  # type: ignore[no-untyped-call]  # noqa: E731
@@ -198,10 +197,7 @@ def main(argv: list[str] | None = None) -> int:
         total += float(score) if isinstance(score, int | float) else 0.0
         keep = ("deal", "supplier_id", "c_open", "c_deal", "c_best", "score")
         print(f"{case_id}: " + json.dumps({k: res.get(k) for k in keep}))
-    print(
-        f"total score {total:.3f} over {len(out)} case(s) = {total * 10:.1f} points"
-        + (" [bluff experiment ON]" if a.bluff else "")
-    )
+    print(f"total score {total:.3f} over {len(out)} case(s) = {total * 10:.1f} points")
     return 0
 
 

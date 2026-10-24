@@ -102,7 +102,7 @@ def build_brief(pkg: Package, supplier_id: str, part_id: str | None, asked_pct: 
                 )
         if part_id:  # quotations for the same part: its own earlier price and rivals' prices
             all_quotes = [q for q in pkg.quotes(part_id) if q["unit_price"] is not None and q["quote_date"]]
-            newest = pkg.latest_quote_date() or ""  # package-wide: a part with only old quotes keeps none
+            newest = max((q["quote_date"] or "" for q in all_quotes), default="")
             cutoff = f"{int(newest[:4]) - 1}{newest[4:]}" if newest else ""
             quotes = [q for q in all_quotes if (q["quote_date"] or "") >= cutoff]  # stale quotes read as irrelevant
             own = [q for q in quotes if q["supplier_id"] == supplier_id][:QUOTES_PER_KIND]

@@ -25,7 +25,6 @@ from anthropic.types.beta import BetaMessageParam, BetaOutputConfigParam, BetaTe
 
 from arena_kit.agents.llm import ID_RE, LLMAgent
 
-from . import bluff
 from .envelope import Envelope, ThreadEnvelope, envelope, safe_cost
 from .evidence import Brief, build_brief
 from .kit import (
@@ -135,7 +134,6 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         model: str | None = None,
         effort: str | None = None,
         deadline: Callable[[], float | None] | None = None,
-        bluff_mode: bool | None = None,
     ) -> None:
         super().__init__(None, pkg.data if pkg else None)  # type: ignore[no-untyped-call]
         self.client, self.pkg, self.deadline = client, pkg, deadline
@@ -148,10 +146,6 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         self.c_open: float | None = None
         self.seen: dict[str, float] = {}  # supplier message_id -> when this agent first saw it
         self.shown_attachments: set[str] = set()
-        # EXPERIMENT: competitor pressure for leverage suppliers (hollerau/bluff.py)
-        self.bluff_on = config()["bluff"]["enabled"] if bluff_mode is None else bluff_mode
-        self.bluffs: dict[str, bluff.BluffState] = {}
-        self.pressure: dict[str, bluff.Pressure] = {}
 
     # -- per case ------------------------------------------------------------------------------
 
@@ -195,7 +189,6 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         self.c_open = None
         self.seen = {}
         self.shown_attachments = set()
-        self.bluffs, self.pressure = {}, {}
         return state
 
     def _seconds_left(self) -> float | None:
@@ -258,8 +251,6 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         if neglected is not None and neglected != env["best_supplier"] and len(live) > 1:
             return self._fallback(case, threads, env, tel, neglected, "Thread close to the 60 s limit.")
         focus = [neglected] if neglected is not None else None
-        if self.bluff_on:
-            self._prepare_pressure(threads, env, tel)
 
         try:
             raw, latency = self._ask_claude(case, threads, env, tel, secs, focus)
@@ -269,8 +260,6 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
             checked = None
         if checked is None:
             checked = self._fallback(case, threads, env, tel)
-        if self.bluff_on:
-            self._record_pressure(checked, threads)
         self._remember_citations(checked)
         return checked
 
@@ -457,7 +446,6 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
                 "propose a cheaper alternative back as your term sheet to get it): "
                 + "; ".join(f"{o['sheet_id']} {json.dumps(o['terms'])} -> C {_eur(o['c'])}" for o in te["offers"]),
                 self._packages(case, te),
-                *([block] if (block := self._pressure_block(sid)) else []),
                 "LEVERS (EUR change in our C vs. their standing sheet, same price; negative = saves us): "
                 + "; ".join(f"{lv['field']}={option_label(lv['value'])}: {lv['delta_eur']:+,.0f}" for lv in levers),
                 f"TELEMETRY: status {t['status']}, mindset {t['mindset']}, concession velocity "
@@ -524,70 +512,6 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         if best is None:
             return closing_move(case, threads)
         return {"supplier_id": best[1], "message": {"action": {"type": "accept", "term_sheet_id": best[2]}}}
-
-    # -- EXPERIMENT: competitor pressure (bluff.py) --------------------------------------------
-
-    def _prepare_pressure(self, threads: Threads, env: Envelope, tel: dict[str, Telemetry]) -> None:
-        assert self.state is not None
-        cfg, stalled = config()["bluff"], config()["telemetry"]["stalled_velocity_pct"]
-        self.pressure = {}
-        for sid, te in env["threads"].items():
-            if not bluff.applies(self.state["protocols"][sid]):
-                continue
-            st = bluff.update(self.bluffs.get(sid, bluff.fresh()), threads.get(sid, []), tel[sid], cfg, stalled)
-            self.bluffs[sid] = st
-            if st["state"] == "called":
-                continue  # never repeat a called claim
-            p = bluff.verified_anchor(sid, te, env, self.state["briefs"].get(sid), self.cited, cfg)
-            p = p or bluff.bluff_level(te, cfg)
-            if p is not None and st["state"] == "folding":
-                p = bluff.hold(p, st["price"], te["standing_price"])  # do not escalate
-            if p is not None:
-                self.pressure[sid] = p
-
-    def _pressure_block(self, sid: str) -> str:
-        if not self.bluff_on:
-            return ""
-        st = self.bluffs.get(sid)
-        if st and st["state"] == "called":
-            return (
-                "COMPETITOR CLAIM CALLED: the supplier questioned or ignored our competitor claim. Never repeat"
-                " it. Retreat: concede about 1% from our last ask or move on non-price levers (PACKAGES)."
-            )
-        p = self.pressure.get(sid)
-        if p is None:
-            return ""
-        how = (
-            f"cite {p['ref']} exactly as written"
-            if p["level"] == "verified"
-            else "no data ID, no supplier name, no documents promised"
-        )
-        working = (
-            " The supplier is moving: hold this level, do not escalate." if st and st["state"] == "folding" else ""
-        )
-        return (
-            f'COMPETITOR PRESSURE (exception to rule 9, this turn only): you may state exactly: "{p["claim"]}" - '
-            f"{how}.{working}"
-        )
-
-    def _record_pressure(self, d: JSONObject, threads: Threads) -> None:
-        sid = str(d.get("supplier_id"))
-        msg = d.get("message")
-        if not isinstance(msg, dict):
-            return
-        p, st = self.pressure.get(sid), self.bluffs.get(sid)
-        body = msg.get("body")
-        note = ""
-        if p is not None and isinstance(body, str) and bluff.used(p, body):
-            sent = sum(m.get("from") == "buyer" for m in threads.get(sid, []))
-            self.bluffs[sid] = {"state": "active", "level": p["level"], "price": p["price"], "claimed_at": sent}
-            ceiling = f" (ceiling EUR {p['ceiling']:,.2f})" if p["ceiling"] is not None else ""
-            note = f" | pressure: {p['level']} EUR {p['price']:,.2f}{ceiling}" + (f" {p['ref']}" if p["ref"] else "")
-        elif st and st["state"] == "called":
-            note = " | competitor claim called -> retreat"
-        audit = msg.get("reasoning_audit")
-        if note and isinstance(audit, dict) and isinstance(audit.get("mathematical_justification"), str):
-            audit["mathematical_justification"] = str(audit["mathematical_justification"]) + note
 
     # -- Python gates --------------------------------------------------------------------------
 
@@ -784,10 +708,7 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
             self.cited |= set(ID_RE.findall(body))
 
 
-def new_agent_factory(
-    pkg: Package | None, bluff_mode: bool | None = None
-) -> Callable[[Callable[[], float | None] | None], HollerauAgent]:
-    """One Anthropic client shared by all cases; one agent per case, each with its wave deadline.
-    `bluff_mode`: the competitor-pressure experiment (None = config default, off)."""
+def new_agent_factory(pkg: Package | None) -> Callable[[Callable[[], float | None] | None], HollerauAgent]:
+    """One Anthropic client shared by all cases; one agent per case, each with its wave deadline."""
     client = anthropic.Anthropic(max_retries=1)
-    return lambda deadline: HollerauAgent(client, pkg, deadline=deadline, bluff_mode=bluff_mode)
+    return lambda deadline: HollerauAgent(client, pkg, deadline=deadline)
