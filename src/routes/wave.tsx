@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { Shell, MindsetBadge, StatusDot } from "@/components/Shell";
-import { useCaseOverview, useSuppliers, supplierNames, eur, clock, scoreLabel, secondsRemaining } from "@/lib/command";
+import { useCaseOverview, useSuppliers, supplierNames, clock, scoreLabel, secondsRemaining } from "@/lib/command";
 import type { CaseOverview, Environment } from "@/integrations/hollerau/types";
 import { CostBar, ProtocolProfile } from "@/components/Telemetry";
 import { Button } from "@/components/ui/button";

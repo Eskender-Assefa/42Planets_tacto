@@ -1,4 +1,4 @@
-import type { AuditLog, CaseOverview, ClaimTally, DecisionSource, Supplier, Terms } from "@/integrations/hollerau/types";
+import type { CaseOverview, ClaimTally, DecisionSource, Supplier, Terms } from "@/integrations/hollerau/types";
 import { eur } from "@/lib/command";
 import { costPositions, countryFlag, decisionLabel, displayText, latencyLabel, protocolTone } from "@/lib/telemetry";
 
@@ -68,5 +68,3 @@ export function TermSheet({ label, terms }: { label: string; terms: Terms | null
 export function TelemetryCosts({ items }: { items: [string, number | null | undefined][] }) {
   return <dl className="grid grid-cols-2 gap-3">{items.map(([label, value]) => <div key={label}><dt className="label-caps">{label}</dt><dd className="mt-1 num text-sm">{eur(value)}</dd></div>)}</dl>;
 }
-
-export type AuditTelemetry = AuditLog;

@@ -5,4 +5,4 @@
 - [ ] ElevenLabs voice for briefing room (waiting on API key)
 - [ ] Python runner write snippet (needs runner write key)
 
-- [ ] Add agent telemetry to wave cards and three-step audits; verify NULL and filled records
+- [x] Add agent telemetry to wave cards and three-step audits; verified live NULL rows and isolated filled-row test fixtures
