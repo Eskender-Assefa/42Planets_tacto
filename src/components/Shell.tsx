@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 const nav = [
   { to: "/", label: "A · ERP Grid" },
   { to: "/wave", label: "B · Wave Terminal" },
+  { to: "/scoreboard", label: "E · Scoreboard" },
 ] as const;
 
 export function Shell({ children }: { children: ReactNode }) {
@@ -50,11 +51,18 @@ export function MindsetBadge({ m }: { m?: string | null | undefined }) {
 }
 
 export function StatusDot({ s }: { s: string }) {
-  const c = s === "Active" ? "bg-primary" : s === "Closed" ? "bg-success" : "bg-destructive";
+  const c =
+    s === "active"
+      ? "bg-primary"
+      : s === "deal"
+        ? "bg-success"
+        : s === "walked_away" || s === "error"
+          ? "bg-destructive"
+          : "bg-muted-foreground";
   return (
     <span className="inline-flex items-center gap-1.5 num text-xs">
       <span className={`h-1.5 w-1.5 rounded-full ${c}`} />
-      {s}
+      {s.replace("_", " ")}
     </span>
   );
 }
