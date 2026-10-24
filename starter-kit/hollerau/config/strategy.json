@@ -62,14 +62,14 @@
   "relationship_price_search": {"low_pct_of_offer": 85.0, "steps": 300},
   "telemetry": {"stalled_velocity_pct": 0.1, "yielding_velocity_pct": 0.5},
   "leverage": {
-    "_comment": "strong_factors_plus.txt: position from our alternative vs C_open. Factors scale the anchor depth; all 1.0 switches the effect off.",
+    "_comment": "strong_factors_plus.txt: position from our alternative vs C_open. Factors scale the anchor depth; all 1.0 = off. Switched off after the factors run (neutral result, P18 -0.07); the position stays visible as information.",
     "vulnerable_above_pct": 5.0,
-    "aggressiveness": {"strong": 1.4, "balanced": 1.0, "vulnerable": 0.85},
-    "vulnerable_landing_pct": 1.0,
+    "aggressiveness": {"strong": 1.0, "balanced": 1.0, "vulnerable": 1.0},
+    "vulnerable_landing_pct": 0.0,
     "guidance": {
-      "strong": "Our alternative is cheaper than the cheapest opening offer: we can squeeze firmly toward the supplier's floor and walk if needed.",
-      "balanced": "Our alternative sits close to the opening offers: negotiate firmly but keep the supplier engaged.",
-      "vulnerable": "Our alternative is far dearer or missing: pace concessions smoothly and secure a safe landing - a breakoff is expensive for us."
+      "strong": "Our alternative is cheaper than the cheapest opening offer.",
+      "balanced": "Our alternative sits close to the opening offers.",
+      "vulnerable": "Our alternative is far dearer than the opening offers, or there is none."
     }
   },
   "llm": {"timeout_s": 35.0, "max_tokens": 4000, "history_messages": 6, "equivalent_sheet_pct": 0.3, "keepalive_s": 25.0}

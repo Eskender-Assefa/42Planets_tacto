@@ -11,7 +11,7 @@ import pytest
 
 from hollerau.envelope import c_alt, c_open, coverage, envelope, leverage_position, thread_envelope
 from hollerau.kit import standard_terms
-from hollerau.profiles import protocol
+from hollerau.profiles import config, protocol
 
 sys.path.insert(0, str(Path(__file__).parent))
 from test_hollerau_negotiator import StandInClient, _reply  # noqa: E402
@@ -56,7 +56,7 @@ def test_positions_follow_the_alternative(ctx):
         assert leverage_position(c_open(case, opening), c_alt(case))[1] == position, name
 
 
-def test_stronger_position_asks_deeper(ctx):
+def test_position_scaling_follows_config(ctx):
     cases, pkg = ctx
     sup, events = "sup:70710", _threads("P08")["sup:70710"][:1]
     asks = {
@@ -65,7 +65,11 @@ def test_stronger_position_asks_deeper(ctx):
         ]
         for pos in ("strong", "balanced", "vulnerable")
     }
-    assert asks["strong"] < asks["balanced"] < asks["vulnerable"]
+    factors = config()["leverage"]["aggressiveness"]
+    if factors["strong"] > factors["balanced"] > factors["vulnerable"]:
+        assert asks["strong"] < asks["balanced"] < asks["vulnerable"]
+    else:  # scaling switched off (all 1.0 after the factors run): position must not move the ask
+        assert asks["strong"] == asks["balanced"] == asks["vulnerable"]
 
 
 def test_twelve_month_counter_is_repaired_to_full_horizon(ctx):
