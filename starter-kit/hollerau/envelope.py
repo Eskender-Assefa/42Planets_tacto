@@ -25,6 +25,7 @@ from .kit import (
     Threads,
     closing_terms,
     complete_offer,
+    must_haves_ok,
     standard_terms,
     standing,
     total_cost,
@@ -210,22 +211,40 @@ def lever_table(case: JSONObject, base: JSONObject, std: JSONObject, est: Suppli
     return out
 
 
+def _distance(terms: JSONObject, base: JSONObject, fields: list[str]) -> float:
+    """How far a package moves the non-price fields from the supplier's sheet (0 = unchanged)."""
+    d = 0.0
+    for f in fields:
+        a, b = terms.get(f), base.get(f)
+        if isinstance(a, int | float) and isinstance(b, int | float) and not isinstance(a, bool):
+            d += abs(a - b) / max(abs(b), 1.0)
+        elif a != b:
+            d += 1.0
+    return d
+
+
 def best_package(
     case: JSONObject, base: JSONObject, price: float, std: JSONObject, est: SupplierEstimate | None
 ) -> tuple[JSONObject, float]:
-    """The lever combination with the lowest C at `price` (as a complete, snapped term sheet)."""
+    """The lever combination with the lowest C at `price` (a complete, snapped term sheet) that
+    keeps the must-haves. Ties (within 1 EUR) go to the package closest to the supplier's sheet:
+    what is free for us is given away (P11, run 2: a chargeback above our defect cost made ppm
+    worthless to us, yet the strictest ppm was asked - and paid for in price)."""
     fields = lever_fields(case)
     combos = itertools.islice(itertools.product(*[_options(case, f) for f in fields]), MAX_COMBOS)
-    best: tuple[JSONObject, float] | None = None
+    best: tuple[JSONObject, float, float] | None = None
     for combo in combos:
         terms = complete_offer(case, {**base, **dict(zip(fields, combo, strict=True)), "unit_price": price})
+        if not must_haves_ok(case, terms, std):
+            continue
         c = safe_cost(case, terms, std, est)
-        if best is None or c < best[1]:
-            best = (terms, c)
-    if best is None:  # no levers: price only
+        dist = _distance(terms, base, fields)
+        if best is None or c < best[1] - 1.0 or (abs(c - best[1]) <= 1.0 and dist < best[2]):
+            best = (terms, c, dist)
+    if best is None:  # no levers (or none keeps the must-haves): price only
         terms = complete_offer(case, {**base, "unit_price": price})
-        best = (terms, safe_cost(case, terms, std, est))
-    return best
+        return terms, safe_cost(case, terms, std, est)
+    return best[0], best[1]
 
 
 def price_for_cost(case: JSONObject, terms: JSONObject, target_c: float, std: JSONObject) -> float | None:
@@ -272,8 +291,6 @@ def _relationship_target(
         if c < best_c:
             best_p, best_terms, best_c = round(cand, 2), terms, c
     anchor = proto["segment"].get("anchor_below_target_pct", 0.0)
-    if floor is not None and floor >= price:
-        anchor = 0.0  # its offer is already below a sustainable price: every cent less costs us (P02)
     ask = round(best_p * (1 - anchor / 100 * (1 - p)), 2)  # start a little below, land on it
     terms, c = best_package(case, best_terms, ask, std, est)
     return ask, terms, c
@@ -307,8 +324,9 @@ def thread_envelope(
     relationship = is_relationship_case(case, proto)
     est, ref = estimate_supplier(case, pkg, supplier_id, country, std) if relationship or pkg else (None, None)
     est_for_c = est if relationship else None
-    # Suppliers often send alternatives next to their main sheet ('offer:...-a'): the standing
-    # offer for us is the cheapest of them, not just the first (practice run 1 ignored them).
+    # Suppliers often send alternatives next to their main sheet ('offer:...-a'). All are priced
+    # for Claude (who can propose an alternative back), but only the main sheet can be accepted
+    # (run 2: accepting an alternative got 422 "not a standing offer"), so it stays the standing one.
     offers: list[OfferOption] = []
     for oid, oterms in latest_sheets(events):
         if _num(oterms.get("unit_price")) is None:
@@ -316,12 +334,7 @@ def thread_envelope(
         c_o = safe_cost(case, oterms, std)
         c_o_true = safe_cost(case, oterms, std, est_for_c)
         offers.append({"sheet_id": oid, "terms": oterms, "c": _finite(c_o), "c_true": _finite(c_o_true)})
-    priced_offers = [o for o in offers if o["c_true"] is not None]
-    if priced_offers:
-        best_offer = min(priced_offers, key=lambda o: o["c_true"] or math.inf)
-        sheet_id, terms = best_offer["sheet_id"], best_offer["terms"]
-    else:
-        sheet_id, terms = standing(events)
+    sheet_id, terms = standing(events)
     price = _num(terms.get("unit_price"))
     sheets = [t for _, t in supplier_sheets(events) if _num(t.get("unit_price")) is not None]
     c_plain = safe_cost(case, terms, std) if price is not None else math.inf

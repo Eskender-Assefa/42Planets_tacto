@@ -122,6 +122,13 @@ class RecordingTable(RemoteTable):  # upstream RemoteTable is unannotated: super
     def close(self, supplier_id: str, message: Message) -> JSONObject:
         action = message.get("action")
         kind = action.get("type") if isinstance(action, dict) else None
+        if kind == "accept" and isinstance(action, dict):
+            main_id, _ = standing(self.threads.get(supplier_id, []))
+            if main_id and action.get("term_sheet_id") != main_id:
+                # the arena accepts only the standing (main) sheet: 422 otherwise, and play() would
+                # lose the whole case (P10 in practice run 2)
+                log.warning("accept of %s swapped to the standing sheet %s", action.get("term_sheet_id"), main_id)
+                action["term_sheet_id"] = main_id
         clean = self._log_move(supplier_id, message, "accept" if kind == "accept" else "walk_away")
         return cast(JSONObject, super().close(supplier_id, clean))  # type: ignore[no-untyped-call]
 

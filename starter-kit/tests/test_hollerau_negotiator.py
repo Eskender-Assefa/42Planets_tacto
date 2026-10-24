@@ -191,7 +191,8 @@ def test_own_lower_quote_is_favourable_evidence(p02):
 
 
 def test_supplier_alternative_sheet_is_priced_and_preferred(p02):
-    """Practice run 1: Kalwisz's '-a' alternative (46.50, 2500 ppm) was never priced."""
+    """Practice run 1: Kalwisz's '-a' alternative (46.50, 2500 ppm) was never priced; run 2: only the
+    main sheet is acceptable."""
     from hollerau.envelope import envelope
     from hollerau.profiles import protocol
 
@@ -201,9 +202,9 @@ def test_supplier_alternative_sheet_is_priced_and_preferred(p02):
     k = next(i for i, m in enumerate(events) if len(m.get("term_sheets") or []) > 1) + 1
     te = envelope(cases["case:P11"], {sup: events[:k]}, [sup], {sup: protocol("quality_first", "PL")}, pkg, {})
     t = te["threads"][sup]
-    assert len(t["offers"]) == 2
-    cheapest = min(t["offers"], key=lambda o: o["c_true"])
-    assert t["sheet_id"] == cheapest["sheet_id"] and t["c_true_standing"] == cheapest["c_true"]
+    assert len(t["offers"]) == 2 and all(o["c_true"] is not None for o in t["offers"])
+    # only the main sheet can be accepted (practice run 2: 422 on an alternative) - it stays standing
+    assert t["sheet_id"] == t["offers"][0]["sheet_id"]
 
 
 def _render_args(agent, case, threads):
@@ -216,3 +217,16 @@ def _render_args(agent, case, threads):
     env = envelope(case, threads, live, agent.state["protocols"], agent.pkg, agent.state["countries"], None)
     tel = {sid: telemetry(case, sid, threads[sid], env["c_open"]) for sid in live}
     return case, threads, env, tel, None
+
+
+def test_final_offer_accept_names_the_main_sheet(p02):
+    """Practice run 2: P10 accepted the final offer's alternative sheet -> 422, case lost."""
+    _, _, pkg = p02
+    cases = {c["case_id"]: c for c in json.loads(CASES.read_text(encoding="utf-8"))}
+    events = _fixture("P10")["sup:70410"]
+    k = next(i for i, m in enumerate(events) if m.get("status") == "final_offer") + 1
+    d = HollerauAgent(StandInClient(error=RuntimeError("no Claude")), pkg).decide(
+        cases["case:P10"], {"sup:70410": events[:k]}
+    )
+    main = events[k - 1]["term_sheets"][0]["term_sheet_id"]
+    assert d["message"]["action"] == {"type": "accept", "term_sheet_id": main}

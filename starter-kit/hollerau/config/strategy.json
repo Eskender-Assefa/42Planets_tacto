@@ -58,7 +58,7 @@
     "_default": {"label": "Neutral / Professional", "guidance": "Clear, polite, professional English."}
   },
   "country_cost_factor": {"DE": 1.0, "AT": 1.05, "CH": 1.05, "CZ": 0.825, "PL": 0.825, "HU": 0.825, "TR": 0.75, "CN": 0.7},
-  "full_cost_estimate": {"use_lower_bound": false},
+  "full_cost_estimate": {"use_lower_bound": true},
   "relationship_price_search": {"low_pct_of_offer": 85.0, "steps": 300},
   "telemetry": {"stalled_velocity_pct": 0.1, "yielding_velocity_pct": 0.5},
   "llm": {"timeout_s": 35.0, "max_tokens": 4000, "history_messages": 6, "equivalent_sheet_pct": 0.3, "keepalive_s": 25.0}

@@ -298,7 +298,6 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         cheapest_live = min(priced) if priced else None
         for sid, te in env["threads"].items():
             status = tel[sid]["status"]
-            # the envelope's standing sheet is already the cheapest of the supplier's alternatives
             sheet_id, terms, c = te["sheet_id"], te["standing_terms"], te["c_true_standing"]
             if sheet_id is None or c is None:
                 continue
@@ -443,7 +442,8 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
                 )
                 + f"; estimated supplier floor price {te['price_floor_est'] or 'unknown'}"
                 + f"; TARGET this round: {json.dumps(te['target_terms'])} -> C {_eur(te['c_target'])}.",
-                "SUPPLIER OFFERS (every sheet of its latest message, our C): "
+                "SUPPLIER OFFERS (every sheet of its latest message, our C; only the first can be accepted - "
+                "propose a cheaper alternative back as your term sheet to get it): "
                 + "; ".join(f"{o['sheet_id']} {json.dumps(o['terms'])} -> C {_eur(o['c'])}" for o in te["offers"]),
                 self._packages(case, te),
                 "LEVERS (EUR change in our C vs. their standing sheet, same price; negative = saves us): "
@@ -565,7 +565,7 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
             msg = d.get("message")
             action_obj = msg.get("action") if isinstance(msg, dict) else None
             if isinstance(action_obj, dict) and te["sheet_id"]:
-                action_obj["term_sheet_id"] = te["sheet_id"]  # cheapest of its alternatives
+                action_obj["term_sheet_id"] = te["sheet_id"]  # the main sheet: the only acceptable one
         elif action == "walk_away":
             alt = env["c_alt"]
             offers = [x["c_true_standing"] for x in env["threads"].values() if x["c_true_standing"] is not None]

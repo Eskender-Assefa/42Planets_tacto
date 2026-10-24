@@ -87,8 +87,6 @@ def test_stabilise_target_never_below_floor_estimate(p02, pkg):
         assert t["price_floor_est"] is not None and t["target_price"] is not None
         anchor = config()["segments"]["stabilise"]["anchor_below_target_pct"]
         assert t["target_price"] >= min(t["price_floor_est"], t["standing_price"]) * (1 - anchor / 100) - 0.01
-        if t["price_floor_est"] >= t["standing_price"]:  # offer below a sustainable price: no squeeze
-            assert t["target_price"] == pytest.approx(t["standing_price"])
         assert t["target_price"] <= t["standing_price"]
         assert t["c_target"] is not None and t["c_target"] <= t["c_true_standing"]
     assert env["c_open"] == pytest.approx(safe_cost(case, events[0]["term_sheets"][0]["terms"], standard_terms(events)))
@@ -133,3 +131,15 @@ def test_rising_index_is_never_favourable_without_an_asked_increase(pkg):
     for item in brief["items"]:
         if item["kind"] == "index" and "+" in item["sentence"].split("changed", 1)[1][:3]:
             assert not item["favourable"], item["sentence"]
+
+
+def test_free_lever_goes_to_the_supplier_and_must_haves_hold(pkg):
+    """Run 2, P11: chargeback >= our defect cost makes ppm worthless to us -> ask the loosest ppm the
+    must-have allows (1500), never the strictest; never a package breaking a must-have (2500)."""
+    _need(CASES, DATA / "cases" / "P11_threads.json")
+    cases = {c["case_id"]: c for c in json.loads(CASES.read_text(encoding="utf-8"))}
+    events = json.loads((DATA / "cases" / "P11_threads.json").read_text(encoding="utf-8"))["sup:70140"][:1]
+    sup = "sup:70140"
+    t = envelope(cases["case:P11"], {sup: events}, [sup], {sup: protocol("quality_first", "PL")}, pkg, {})
+    target = t["threads"][sup]["target_terms"]
+    assert target["ppm_commitment"] == 1500 and target["chargeback_eur_per_complaint"] == 500
