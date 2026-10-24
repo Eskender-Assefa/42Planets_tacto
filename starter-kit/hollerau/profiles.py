@@ -56,6 +56,13 @@ class FullCostConfig(TypedDict):
     use_lower_bound: bool
 
 
+class LeverageConfig(TypedDict):
+    vulnerable_above_pct: float  # alternative more than this % above C_open (or none) = vulnerable
+    aggressiveness: dict[str, float]  # position -> anchor-depth factor
+    vulnerable_landing_pct: float  # vulnerable: land this % softer
+    guidance: dict[str, str]  # position -> prompt guidance
+
+
 class StrategyConfig(TypedDict):
     segments: dict[str, SegmentConfig]
     cultures: dict[str, CultureConfig]
@@ -63,6 +70,7 @@ class StrategyConfig(TypedDict):
     full_cost_estimate: FullCostConfig
     relationship_price_search: PriceSearchConfig
     telemetry: TelemetryConfig
+    leverage: LeverageConfig
     llm: LLMConfig
 
 

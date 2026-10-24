@@ -49,6 +49,14 @@ def relationship_cost(
     return float(cost.relationship_cost(case, terms, standard, supplier))  # type: ignore[no-untyped-call]
 
 
+def cost_breakdown(
+    case: JSONObject, terms: JSONObject, standard: JSONObject | None = None, supplier: SupplierEstimate | None = None
+) -> dict[str, float]:
+    """C by component (price, uncovered_need, fallback_risk, payment_terms, ...)."""
+    parts = cost.cost_breakdown(case, terms, standard, supplier)  # type: ignore[no-untyped-call]
+    return {str(k): float(v) for k, v in parts.items()}
+
+
 def closing_terms(case: JSONObject, terms: JSONObject, standard: JSONObject | None = None) -> JSONObject:
     return cast(JSONObject, cost.closing_terms(case, terms, standard))  # type: ignore[no-untyped-call]
 

@@ -25,7 +25,7 @@ from anthropic.types.beta import BetaMessageParam, BetaOutputConfigParam, BetaTe
 
 from arena_kit.agents.llm import ID_RE, LLMAgent
 
-from .envelope import Envelope, ThreadEnvelope, envelope, safe_cost
+from .envelope import Envelope, ThreadEnvelope, coverage, envelope, safe_cost
 from .evidence import Brief, build_brief
 from .kit import (
     JSONObject,
@@ -95,7 +95,10 @@ Rules:
    saves.
 11. Answer the supplier's questions when the answer is cheap for us (e.g. a binding volume up to our
    yearly need costs nothing) - it buys price.
-12. reasoning_audit: observed_barrier = the resistance or signal you see from the supplier;
+12. Coverage: when an offer covers less than 100% of our need over the horizon (COVERAGE line),
+   demand guaranteed pricing for the full volume over the full contract period - the uncovered
+   rest is bought at the expensive fallback price.
+13. reasoning_audit: observed_barrier = the resistance or signal you see from the supplier;
    strategic_intent = why this move and package, in one or two sentences, without numbers you did
    not copy."""
 
@@ -239,6 +242,17 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
             d = self._close(case, threads, env)
             return self._with_audit(case, d, env, tel, "closing", "Wave cap near.", "Close on the best sheet.")
 
+        walk = self._rule_walk(env, tel)
+        if walk is not None:
+            return self._with_audit(
+                case,
+                walk,
+                env,
+                tel,
+                "rule",
+                "Best final offer costs more than our alternative.",
+                "Walk away deliberately: the alternative scores better than this deal.",
+            )
         rule = self._rule_accept(case, threads, env, tel)
         if rule is not None:
             decision, (observed, intent) = rule
@@ -307,6 +321,8 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
                     continue  # another supplier is cheaper: keep negotiating there
             elif status != "agreed" and (target is None or c > target):
                 continue
+            elif self._partial_negotiable(case, te) and tel[sid]["moves_left"] > 1:
+                continue  # demand full coverage first (strong_factors_plus.txt: reject partial offers)
             if (alt is not None and c >= alt) or (c_open is not None and c >= c_open):
                 continue
             if not must_haves_ok(case, terms, te["standard"]):
@@ -446,6 +462,10 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
                 "propose a cheaper alternative back as your term sheet to get it): "
                 + "; ".join(f"{o['sheet_id']} {json.dumps(o['terms'])} -> C {_eur(o['c'])}" for o in te["offers"]),
                 self._packages(case, te),
+                f"COVERAGE: their standing sheet covers {self._pct(te['coverage_pct'])} of our need over the "
+                f"horizon; the uncovered part costs {_eur(te['uncovered_eur'])} at the fallback price. "
+                f"Our target covers {self._pct(te['target_coverage_pct'])}.",
+                f"POSITION: {env['position']} - {config()['leverage']['guidance'].get(env['position'], '')}",
                 "LEVERS (EUR change in our C vs. their standing sheet, same price; negative = saves us): "
                 + "; ".join(f"{lv['field']}={option_label(lv['value'])}: {lv['delta_eur']:+,.0f}" for lv in levers),
                 f"TELEMETRY: status {t['status']}, mindset {t['mindset']}, concession velocity "
@@ -485,6 +505,10 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         out.append(f"\nALREADY CITED (never cite again): {sorted(self.cited) or 'none'}")
         out.append("Decide the next move now.")
         return "\n".join(out)
+
+    @staticmethod
+    def _pct(v: float | None) -> str:
+        return "unknown" if v is None else f"{v:.0%}"
 
     def _packages(self, case: JSONObject, te: ThreadEnvelope) -> str:
         """Linked demands made visible: the supplier's own structure at our target price vs. our best
@@ -559,6 +583,9 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
                 or t["moves_left"] <= 1
                 or env["progress"] >= 0.85
             )
+            if self._partial_negotiable(case, te) and t["moves_left"] > 1 and t["status"] != "final_offer":
+                log.info("accept vetoed: the sheet covers only %s of our need", te["coverage_pct"])
+                return None  # counter with full coverage (the target sheet)
             if c is None or (target is not None and c > target * 1.002 and not late):
                 log.info("accept vetoed: C %s above target %s and the case is not late", c, target)
                 return None  # deterministic counter instead
@@ -576,18 +603,68 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
             msg = d.get("message")
             if not isinstance(msg, dict):
                 return None
-            kept = []
+            kept: list[JSONValue] = []
             for s in msg.get("term_sheets") or []:  # type: ignore[union-attr]
-                terms = s.get("terms") if isinstance(s, dict) else None
-                if not isinstance(terms, dict):
+                raw_terms = s.get("terms") if isinstance(s, dict) else None
+                if not isinstance(raw_terms, dict):
                     continue
+                terms = self._full_coverage(case, cast(JSONObject, raw_terms), te)
                 c = safe_cost(case, terms, te["standard"], te["supplier_estimate"])
                 if te["c_true_standing"] is None or c < te["c_true_standing"]:
-                    kept.append(s)
+                    kept.append({**cast(JSONObject, s), "terms": terms})
             if not kept and te["target_terms"]:
                 kept = [{"terms": te["target_terms"]}]
             msg["term_sheets"] = self._equivalent(case, te, kept)[:3]
         return self._with_audit(case, d, env, tel, "claude", observed, intent, latency)
+
+    def _coverage_fields(self, case: JSONObject) -> list[str]:
+        neg = case.get("negotiable")
+        return [f for f in ("contract_months", "volume_per_year") if isinstance(neg, list) and f in neg]
+
+    def _partial_negotiable(self, case: JSONObject, te: ThreadEnvelope) -> bool:
+        """The standing sheet leaves need uncovered and months / volume are still negotiable."""
+        cov = te["coverage_pct"]
+        return cov is not None and cov < 0.999 and bool(self._coverage_fields(case))
+
+    def _full_coverage(self, case: JSONObject, terms: JSONObject, te: ThreadEnvelope) -> JSONObject:
+        """A counter-sheet repaired to cover the whole need over the horizon - kept only when the
+        cost function says it is cheaper for us (uncovered need costs the fallback price + risk)."""
+        cov, _ = coverage(case, terms, te["standard"])
+        fields = self._coverage_fields(case)
+        buyer = case.get("buyer")
+        if cov is None or cov >= 0.999 or not fields or not isinstance(buyer, dict):
+            return terms
+        need, horizon = buyer.get("need_per_year"), buyer.get("horizon_years")
+        if not isinstance(need, int | float) or not isinstance(horizon, int | float):
+            return terms
+        opts = case.get("term_options") if isinstance(case.get("term_options"), dict) else {}
+        repaired: JSONObject = dict(terms)
+        wanted = {"contract_months": horizon * 12, "volume_per_year": need}
+        for f in fields:
+            options = opts.get(f) if isinstance(opts, dict) else None
+            nums = sorted(o for o in options if isinstance(o, int | float)) if isinstance(options, list) else []
+            fit = [o for o in nums if o >= wanted[f]]
+            repaired[f] = fit[0] if fit else (nums[-1] if nums else wanted[f])
+        repaired = complete_offer(case, repaired)
+        if safe_cost(case, repaired, te["standard"], te["supplier_estimate"]) < safe_cost(
+            case, terms, te["standard"], te["supplier_estimate"]
+        ):
+            log.info("counter-sheet repaired to full coverage: %s", repaired)
+            return repaired
+        return terms
+
+    def _rule_walk(self, env: Envelope, tel: dict[str, Telemetry]) -> JSONObject | None:
+        """Every live supplier made its final offer and each costs at least our alternative:
+        walking away scores better than any of these deals (strong_factors_plus.txt)."""
+        alt = env["c_alt"]
+        if alt is None or not env["threads"]:
+            return None
+        for sid, te in env["threads"].items():
+            c = te["c_true_standing"]
+            if tel[sid]["status"] != "final_offer" or c is None or c < alt:
+                return None
+        sid = next(iter(env["threads"]))
+        return {"supplier_id": sid, "message": {"action": {"type": "walk_away"}}}
 
     def _equivalent(self, case: JSONObject, te: ThreadEnvelope, sheets: list[JSONValue]) -> list[JSONValue]:
         """Multiple sheets must be equivalent for us (MESO): a supplier will pick the one it likes
@@ -694,11 +771,15 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
             f"target {_eur(te['c_target'])}",
             f"floor estimate {_eur(te['c_floor_est'])}",
             f"alternative {_eur(env['c_alt'])}",
+            f"position {env['position']}"
+            + (f" (alt {env['leverage_gap_pct']:+.1f}% vs C_open)" if env["leverage_gap_pct"] is not None else ""),
         ]
         if best and best["delta_eur"] < 0:
             parts.append(f"best lever {best['field']}={option_label(best['value'])} saves {_eur(-best['delta_eur'])}")
         if t["concession_velocity"] is not None:
             parts.append(f"concession velocity {t['concession_velocity']}%/round ({t['mindset']})")
+        if te["coverage_pct"] is not None and te["coverage_pct"] < 0.999:
+            parts.append(f"supplier sheet covers {te['coverage_pct']:.0%} (uncovered {_eur(te['uncovered_eur'])})")
         return " | ".join(parts) + "."
 
     def _remember_citations(self, d: JSONObject) -> None:

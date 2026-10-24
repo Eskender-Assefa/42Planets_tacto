@@ -15,7 +15,7 @@ Per supplier thread:
 import itertools
 import logging
 import math
-from typing import TypedDict
+from typing import Literal, TypedDict
 
 from .kit import (
     JSONObject,
@@ -25,6 +25,7 @@ from .kit import (
     Threads,
     closing_terms,
     complete_offer,
+    cost_breakdown,
     must_haves_ok,
     standard_terms,
     standing,
@@ -39,6 +40,9 @@ MAX_COMBOS = 400  # lever packages priced per candidate price
 FULL_WAVE_S, CLOSE_S = 480.0, 90.0  # the final's wave cap and the kit's close-before-cap margin
 
 
+Position = Literal["strong", "balanced", "vulnerable"]
+
+
 class LeverOption(TypedDict):
     field: str
     value: JSONValue
@@ -50,6 +54,8 @@ class OfferOption(TypedDict):
     terms: JSONObject
     c: float | None  # C as the arena scores it
     c_true: float | None  # incl. our supplier-health estimate
+    coverage_pct: float | None  # share of our need over the horizon this sheet covers
+    uncovered_eur: float | None  # what the uncovered rest costs at the fallback price (+ risk)
 
 
 class ThreadEnvelope(TypedDict):
@@ -71,6 +77,9 @@ class ThreadEnvelope(TypedDict):
     c_target: float | None
     levers: list[LeverOption]
     offers: list[OfferOption]  # every sheet of the supplier's latest message, priced
+    coverage_pct: float | None  # the standing sheet's coverage of our need over the horizon
+    uncovered_eur: float | None
+    target_coverage_pct: float | None
 
 
 class Envelope(TypedDict):
@@ -78,6 +87,8 @@ class Envelope(TypedDict):
     c_alt: float | None
     progress: float  # 0 = first round, 1 = landing (last rounds or the wave cap is near)
     best_supplier: str | None  # cheapest standing sheet by true C
+    leverage_gap_pct: float | None  # (C_alt - C_open) / C_open; None without an alternative
+    position: Position  # strong / balanced / vulnerable (strong_factors_plus.txt)
     threads: dict[str, ThreadEnvelope]
 
 
@@ -145,6 +156,41 @@ def c_open(case: JSONObject, threads: Threads) -> float | None:
             costs.append(safe_cost(case, sheets[0], standard_terms(events)))
     finite = [c for c in costs if math.isfinite(c)]
     return round(min(finite), 2) if finite else None
+
+
+def coverage(case: JSONObject, terms: JSONObject, std: JSONObject | None) -> tuple[float | None, float | None]:
+    """(share of our need over the horizon the sheet covers, EUR the uncovered rest costs).
+    Uncovered need is bought at the fallback price plus the category's fallback risk -
+    arena_kit.cost prices it; this only reads the parts out (strong_factors_plus.txt, factor 1)."""
+    buyer = case.get("buyer")
+    if not isinstance(buyer, dict):
+        return None, None
+    need, horizon = _num(buyer.get("need_per_year")), _num(buyer.get("horizon_years"))
+    t = closing_terms(case, terms, std)
+    vol, months = _num(t.get("volume_per_year")), _num(t.get("contract_months"))
+    if not need or not horizon or vol is None or months is None:
+        return None, None
+    years = min(months / 12 if months else 1.0, horizon)  # a single order counts as one year's lot
+    pct = round(min(vol, need) * years / (need * horizon), 4)
+    if _num(t.get("unit_price")) is None:
+        return pct, None
+    try:
+        parts = cost_breakdown(case, terms, std)
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        return pct, None
+    return pct, round(parts.get("uncovered_need", 0.0) + parts.get("fallback_risk", 0.0), 2)
+
+
+def leverage_position(c_open_v: float | None, c_alt_v: float | None) -> tuple[float | None, Position]:
+    """Our alternative vs. the cheapest opening (strong_factors_plus.txt, factor 2)."""
+    if c_open_v is None or c_alt_v is None or c_open_v <= 0:
+        return None, "vulnerable"  # no alternative: a breakoff leaves us exposed
+    gap = round((c_alt_v - c_open_v) / c_open_v * 100, 2)
+    if gap < 0:
+        return gap, "strong"
+    if gap > config()["leverage"]["vulnerable_above_pct"]:
+        return gap, "vulnerable"
+    return gap, "balanced"
 
 
 def is_relationship_case(case: JSONObject, proto: Protocol) -> bool:
@@ -278,6 +324,7 @@ def _relationship_target(
     est: SupplierEstimate,
     p: float,
     proto: Protocol,
+    aggr: float = 1.0,
 ) -> tuple[float, JSONObject, float]:
     """Price grid search for the lowest true C (price saving vs. supplier-health charge), never
     below the supplier's estimated floor: a price it cannot accept is no target at all."""
@@ -290,22 +337,32 @@ def _relationship_target(
         terms, c = best_package(case, base, round(cand, 2), std, est)
         if c < best_c:
             best_p, best_terms, best_c = round(cand, 2), terms, c
-    anchor = proto["segment"].get("anchor_below_target_pct", 0.0)
+    anchor = proto["segment"].get("anchor_below_target_pct", 0.0) * aggr
     ask = round(best_p * (1 - anchor / 100 * (1 - p)), 2)  # start a little below, land on it
     terms, c = best_package(case, best_terms, ask, std, est)
     return ask, terms, c
 
 
 def _leverage_target(
-    case: JSONObject, base: JSONObject, price: float, floor: float | None, std: JSONObject, p: float, proto: Protocol
+    case: JSONObject,
+    base: JSONObject,
+    price: float,
+    floor: float | None,
+    std: JSONObject,
+    p: float,
+    proto: Protocol,
+    aggr: float = 1.0,
+    soften: float = 0.0,
 ) -> tuple[float, JSONObject, float]:
+    """Anchor -> landing curve. `aggr` scales the anchor depth by our leverage position;
+    `soften` (vulnerable) lands that many % less deep."""
     seg = proto["segment"]
     if floor is not None:
-        anchor = floor * (1 - seg.get("anchor_below_floor_pct", 0.0) / 100)
-        landing = floor * (1 + seg.get("landing_above_floor_pct", 0.0) / 100)
+        anchor = floor * (1 - seg.get("anchor_below_floor_pct", 0.0) * aggr / 100)
+        landing = floor * (1 + (seg.get("landing_above_floor_pct", 0.0) + soften) / 100)
     else:
-        anchor = price * (1 - seg.get("anchor_below_offer_pct", 5.0) / 100)
-        landing = price * (1 - seg.get("landing_below_offer_pct", 1.0) / 100)
+        anchor = price * (1 - seg.get("anchor_below_offer_pct", 5.0) * aggr / 100)
+        landing = price * (1 - max(seg.get("landing_below_offer_pct", 1.0) - soften, 0.0) / 100)
     ask = round(min(price, anchor + (landing - anchor) * p), 2)
     terms, c = best_package(case, base, ask, std, None)
     return ask, terms, c
@@ -319,7 +376,11 @@ def thread_envelope(
     pkg: Package | None,
     country: str | None,
     p: float,
+    position: Position = "balanced",
 ) -> ThreadEnvelope:
+    lev = config()["leverage"]
+    aggr = lev["aggressiveness"].get(position, 1.0)
+    soften = lev["vulnerable_landing_pct"] if position == "vulnerable" else 0.0
     std = standard_terms(events)
     relationship = is_relationship_case(case, proto)
     est, ref = estimate_supplier(case, pkg, supplier_id, country, std) if relationship or pkg else (None, None)
@@ -333,12 +394,23 @@ def thread_envelope(
             continue
         c_o = safe_cost(case, oterms, std)
         c_o_true = safe_cost(case, oterms, std, est_for_c)
-        offers.append({"sheet_id": oid, "terms": oterms, "c": _finite(c_o), "c_true": _finite(c_o_true)})
+        cov, unc = coverage(case, oterms, std)
+        offers.append(
+            {
+                "sheet_id": oid,
+                "terms": oterms,
+                "c": _finite(c_o),
+                "c_true": _finite(c_o_true),
+                "coverage_pct": cov,
+                "uncovered_eur": unc,
+            }
+        )
     sheet_id, terms = standing(events)
     price = _num(terms.get("unit_price"))
     sheets = [t for _, t in supplier_sheets(events) if _num(t.get("unit_price")) is not None]
     c_plain = safe_cost(case, terms, std) if price is not None else math.inf
     c_true = safe_cost(case, terms, std, est_for_c) if price is not None else math.inf
+    cov_s, unc_s = coverage(case, terms, std) if terms else (None, None)
 
     floor: float | None = None
     if est is not None:
@@ -358,9 +430,9 @@ def thread_envelope(
     if price is not None:
         base = complete_offer(case, terms)
         if relationship and est is not None:
-            target_price, target_terms, ct = _relationship_target(case, base, price, floor, std, est, p, proto)
+            target_price, target_terms, ct = _relationship_target(case, base, price, floor, std, est, p, proto, aggr)
         else:
-            target_price, target_terms, ct = _leverage_target(case, base, price, floor, std, p, proto)
+            target_price, target_terms, ct = _leverage_target(case, base, price, floor, std, p, proto, aggr, soften)
         cap = proto["segment"].get("max_discount_from_offer_pct")
         if cap is not None and target_price is not None and target_price < price * (1 - cap / 100):
             # bottleneck / strategic suppliers hold the power: an ask far below their offer makes
@@ -390,6 +462,9 @@ def thread_envelope(
         "c_target": c_target,
         "levers": lever_table(case, complete_offer(case, terms), std, est_for_c) if price is not None else [],
         "offers": offers,
+        "coverage_pct": cov_s,
+        "uncovered_eur": unc_s,
+        "target_coverage_pct": coverage(case, target_terms, std)[0] if target_terms else None,
     }
 
 
@@ -405,16 +480,20 @@ def envelope(
     """The envelope of every live thread this turn."""
     per: dict[str, ThreadEnvelope] = {}
     p_all = 0.0
+    c_open_v, c_alt_v = c_open(case, threads), c_alt(case)
+    gap, position = leverage_position(c_open_v, c_alt_v)
     for sid in live:
         events = threads.get(sid, [])
         p = progress(case, events, seconds_left)
         p_all = max(p_all, p)
-        per[sid] = thread_envelope(case, sid, events, protocols[sid], pkg, countries.get(sid), p)
+        per[sid] = thread_envelope(case, sid, events, protocols[sid], pkg, countries.get(sid), p, position)
     priced = [(e["c_true_standing"], sid) for sid, e in per.items() if e["c_true_standing"] is not None]
     return {
-        "c_open": c_open(case, threads),
-        "c_alt": c_alt(case),
+        "c_open": c_open_v,
+        "c_alt": c_alt_v,
         "progress": p_all,
         "best_supplier": min(priced)[1] if priced else None,
+        "leverage_gap_pct": gap,
+        "position": position,
         "threads": per,
     }
