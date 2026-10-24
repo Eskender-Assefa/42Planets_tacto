@@ -14,7 +14,136 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      audit_logs: {
+        Row: {
+          calculated_local_cost: number | null
+          concession_velocity: number | null
+          created_at: string
+          id: number
+          mathematical_justification: string
+          observed_barrier: string
+          raw_email_sent: string
+          session_id: string | null
+          strategic_intent: string
+          supplier_mindset: string | null
+          supplier_price_offered: number | null
+          turn_number: number
+        }
+        Insert: {
+          calculated_local_cost?: number | null
+          concession_velocity?: number | null
+          created_at?: string
+          id?: number
+          mathematical_justification: string
+          observed_barrier: string
+          raw_email_sent?: string
+          session_id?: string | null
+          strategic_intent: string
+          supplier_mindset?: string | null
+          supplier_price_offered?: number | null
+          turn_number: number
+        }
+        Update: {
+          calculated_local_cost?: number | null
+          concession_velocity?: number | null
+          created_at?: string
+          id?: number
+          mathematical_justification?: string
+          observed_barrier?: string
+          raw_email_sent?: string
+          session_id?: string | null
+          strategic_intent?: string
+          supplier_mindset?: string | null
+          supplier_price_offered?: number | null
+          turn_number?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "audit_logs_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "cases"
+            referencedColumns: ["session_id"]
+          },
+        ]
+      }
+      cases: {
+        Row: {
+          c_best_floor: number
+          c_current_offer: number
+          c_open: number
+          current_score: number
+          final_score: number | null
+          seconds_left: number
+          session_id: string
+          status: string
+          supplier_id: string | null
+          turn_number: number
+          updated_at: string
+          wave_number: number
+        }
+        Insert: {
+          c_best_floor: number
+          c_current_offer: number
+          c_open: number
+          current_score?: number
+          final_score?: number | null
+          seconds_left?: number
+          session_id: string
+          status?: string
+          supplier_id?: string | null
+          turn_number?: number
+          updated_at?: string
+          wave_number?: number
+        }
+        Update: {
+          c_best_floor?: number
+          c_current_offer?: number
+          c_open?: number
+          current_score?: number
+          final_score?: number | null
+          seconds_left?: number
+          session_id?: string
+          status?: string
+          supplier_id?: string | null
+          turn_number?: number
+          updated_at?: string
+          wave_number?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cases_supplier_id_fkey"
+            columns: ["supplier_id"]
+            isOneToOne: false
+            referencedRelation: "suppliers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      suppliers: {
+        Row: {
+          country: string
+          historical_base_cost: number
+          id: string
+          name: string
+          segment: string
+        }
+        Insert: {
+          country: string
+          historical_base_cost?: number
+          id: string
+          name: string
+          segment: string
+        }
+        Update: {
+          country?: string
+          historical_base_cost?: number
+          id?: string
+          name?: string
+          segment?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
