@@ -7,7 +7,7 @@ export const decisionLabels: Record<DecisionSource, string> = {
 export const displayText = (value: string | null | undefined) => value?.trim() ? value : "-";
 export const decisionLabel = (source: DecisionSource | null | undefined) => source ? decisionLabels[source] ?? "-" : "-";
 export const latencyLabel = (ms: number | null | undefined) => ms == null ? "-" : `${(ms / 1000).toFixed(1)} s`;
-export const velocityLabel = (velocity: number | null | undefined) => velocity == null ? "-" : `${(velocity * 100).toFixed(2)}% of C_open / round`;
+export const velocityLabel = (velocity: number | null | undefined) => velocity == null ? "-" : `${velocity.toFixed(2)}% of C_open / round`;
 
 export function protocolTone(protocol: string | null | undefined) {
   if (protocol?.startsWith("Leverage")) return "success";
