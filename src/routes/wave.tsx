@@ -1,8 +1,10 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { Shell, MindsetBadge, StatusDot } from "@/components/Shell";
-import { useCaseOverview, useSuppliers, supplierNames, eur, clock, scoreLabel, secondsRemaining } from "@/lib/command";
+import { useCaseOverview, useSuppliers, supplierNames, clock, scoreLabel, secondsRemaining } from "@/lib/command";
 import type { CaseOverview, Environment } from "@/integrations/hollerau/types";
+import { CostBar, ProtocolProfile } from "@/components/Telemetry";
+import { Button } from "@/components/ui/button";
 
 export const Route = createFileRoute("/wave")({
   head: () => ({
@@ -39,29 +41,29 @@ function Wave() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {ENVIRONMENTS.map((e) => (
-            <button
+            <Button variant="outline" size="sm"
               key={e}
               onClick={() => setEnv(e)}
               className={`border px-3 py-1.5 num text-xs uppercase tracking-wider ${activeEnv === e ? "border-primary text-primary" : "border-border text-muted-foreground hover:text-foreground"}`}
             >
               {e}
-            </button>
+            </Button>
           ))}
           <span className="mx-1 h-4 w-px bg-border" />
-          <button
+          <Button variant="outline" size="sm"
             onClick={() => setWave(null)}
             className={`border px-3 py-1.5 num text-xs uppercase tracking-wider ${wave == null ? "border-primary text-primary" : "border-border text-muted-foreground hover:text-foreground"}`}
           >
             All
-          </button>
+          </Button>
           {waves.map((w) => (
-            <button
+            <Button variant="outline" size="sm"
               key={w}
               onClick={() => setWave(w)}
               className={`border px-3 py-1.5 num text-xs uppercase tracking-wider ${wave === w ? "border-primary text-primary" : "border-border text-muted-foreground hover:text-foreground"}`}
             >
               W{w}
-            </button>
+            </Button>
           ))}
         </div>
       </div>
@@ -69,7 +71,7 @@ function Wave() {
       {!query.isLoading && data.length === 0 && (
         <div className="panel p-10 text-center text-muted-foreground">No cases yet — start the runner.</div>
       )}
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
         {data.map((c) => <WaveCard key={c.session_id} c={c} suppliers={suppliers.data} />)}
       </div>
     </Shell>
@@ -103,9 +105,11 @@ function WaveCard({ c, suppliers }: { c: CaseOverview; suppliers: ReturnType<typ
         <StatusDot s={c.status} />
       </div>
 
+      <ProtocolProfile c={c} suppliers={suppliers} />
+
       <div>
         <div className="flex justify-between">
-          <span className="label-caps">Turn {c.last_turn ?? "—"}</span>
+          <span className="label-caps">Turn {c.last_turn ?? "-"}</span>
           <span className={`num text-sm ${critical ? "text-destructive" : ""}`}>{secs == null ? "-" : clock(secs)}</span>
         </div>
         <div className="mt-1 h-1 bg-muted">
@@ -116,13 +120,7 @@ function WaveCard({ c, suppliers }: { c: CaseOverview; suppliers: ReturnType<typ
         </div>
       </div>
 
-      <div>
-        <div className="label-caps mb-1">Cost position</div>
-        <div className="mt-1 flex justify-between num text-[10px] text-muted-foreground">
-          <span>open {eur(c.c_open)}</span><span>best {eur(c.c_best)}</span>
-        </div>
-        <div className="mt-2 num text-lg text-primary">{eur(c.last_c_supplier_offer)}</div>
-      </div>
+      <CostBar c={c} />
 
       <div className="mt-auto flex items-center justify-between border-t border-border pt-3">
         <MindsetBadge m={c.last_mindset} />

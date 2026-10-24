@@ -5,14 +5,14 @@ import type { AuditLog, CaseOverview, Environment, Supplier, WaveScore } from "@
 
 export const eur = (n: number | null | undefined) =>
   n == null
-    ? "—"
+    ? "-"
     : new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(n);
 
 export const clock = (s: number) =>
   `${String(Math.floor(Math.max(0, s) / 60)).padStart(2, "0")}:${String(Math.max(0, s) % 60).padStart(2, "0")}`;
 
 /** Score is owned by the backend cost engine; show it exactly as stored. */
-export const scoreLabel = (s: number | null | undefined) => (s == null ? "pending" : s.toFixed(3));
+export const scoreLabel = (s: number | null | undefined) => (s == null ? "-" : s.toFixed(3));
 
 /** Seconds remaining, ticking down locally from the last move's snapshot. */
 export function secondsRemaining(c: CaseOverview, now = Date.now()): number | null {
@@ -67,7 +67,7 @@ export function useSuppliers() {
 }
 
 export function supplierNames(c: CaseOverview, suppliers: Map<string, Supplier> | undefined): string {
-  if (!c.supplier_ids.length) return "—";
+  if (!c.supplier_ids.length) return "-";
   return c.supplier_ids.map((id) => suppliers?.get(id)?.name ?? id).join(", ");
 }
 
@@ -81,10 +81,11 @@ export function useCaseOverview(environment: Environment | null, wave: number | 
       queryKey: ["hollerau", "case_overview", env, wave],
       enabled: env != null,
       queryFn: async (): Promise<CaseOverview[]> => {
+        if (env == null) return [];
         let q = hollerau
           .from("case_overview")
           .select("*")
-          .eq("environment", env!)
+          .eq("environment", env)
           .order("started_at", { ascending: false });
         if (wave != null) q = q.eq("wave", wave);
         const { data, error } = await q;
