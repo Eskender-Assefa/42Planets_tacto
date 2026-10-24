@@ -148,6 +148,12 @@ class Package:
         rows = self._query("SELECT * FROM quotes WHERE part_id = ? ORDER BY quote_date DESC", (part_id,))
         return [_as(Quote, r) for r in rows]
 
+    def latest_quote_date(self) -> str | None:
+        """The newest quotation date in the whole package - the data's 'today' for quote age."""
+        rows = self._query("SELECT MAX(quote_date) AS d FROM quotes")
+        value = rows[0]["d"] if rows else None
+        return value if isinstance(value, str) else None
+
     def news(self, supplier_id: str) -> list[NewsItem]:
         rows = self._query("SELECT * FROM news WHERE supplier_id = ? ORDER BY date DESC", (supplier_id,))
         return [_as(NewsItem, r) for r in rows]

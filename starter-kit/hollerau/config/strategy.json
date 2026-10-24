@@ -61,5 +61,14 @@
   "full_cost_estimate": {"use_lower_bound": true},
   "relationship_price_search": {"low_pct_of_offer": 85.0, "steps": 300},
   "telemetry": {"stalled_velocity_pct": 0.1, "yielding_velocity_pct": 0.5},
+  "bluff": {
+    "_comment": "EXPERIMENT (Bluffs.txt), leverage cases only, off by default; switched on per run with `run.py --bluff`.",
+    "enabled": false,
+    "bluff_pct": 6.0,
+    "max_bluff_pct": 10.0,
+    "ceiling_over_floor_pct": 2.0,
+    "verified_margin_pct": 0.5,
+    "called_patterns": ["send us the data", "send over the actual data", "which figures", "share this data", "share the data", "documentation", "cannot match", "outside our viable", "not possible to match", "does not concern"]
+  },
   "llm": {"timeout_s": 35.0, "max_tokens": 4000, "history_messages": 6, "equivalent_sheet_pct": 0.3, "keepalive_s": 25.0}
 }
