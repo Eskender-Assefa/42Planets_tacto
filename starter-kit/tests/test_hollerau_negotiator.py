@@ -114,3 +114,51 @@ def test_dearer_option_b_is_dropped(p02):
     d = HollerauAgent(StandInClient(reply), pkg).decide(case, threads)
     prices = [s["terms"]["unit_price"] for s in d["message"]["term_sheets"]]
     assert prices == [360.0]  # 366 would be a concession in disguise: the supplier picks it
+
+
+def _fixture(name):
+    path = DATA / "cases" / f"{name}_threads.json"
+    if not path.exists():
+        pytest.skip(f"fixture missing: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_final_offer_is_accepted_not_pushed(p02):
+    """Regression, practice run 1: P10 countered a final_offer and the supplier walked."""
+    _, _, pkg = p02
+    cases = {c["case_id"]: c for c in json.loads(CASES.read_text(encoding="utf-8"))}
+    events = _fixture("P10")["sup:70410"]
+    k = next(i for i, m in enumerate(events) if m.get("status") == "final_offer") + 1
+    client = StandInClient(error=RuntimeError("Claude must not be asked"))
+    d = HollerauAgent(client, pkg).decide(cases["case:P10"], {"sup:70410": events[:k]})
+    assert d["message"]["action"]["type"] == "accept" and not client.calls
+    assert d["message"]["reasoning_audit"]["decision_source"] == "rule"
+
+
+def test_bottleneck_ask_stays_near_the_offer(p02):
+    """Regression, practice run 1: a should-cost anchor 16 % under a bottleneck offer."""
+    from hollerau.envelope import envelope
+    from hollerau.profiles import config, protocol
+
+    _, _, pkg = p02
+    cases = {c["case_id"]: c for c in json.loads(CASES.read_text(encoding="utf-8"))}
+    events = _fixture("P10")["sup:70410"][:1]
+    sup = "sup:70410"
+    t = envelope(cases["case:P10"], {sup: events}, [sup], {sup: protocol("secure_supply", "DE")}, pkg, {sup: "DE"})
+    cap = config()["segments"]["secure_supply"]["max_discount_from_offer_pct"]
+    te = t["threads"][sup]
+    assert te["target_price"] >= round(te["standing_price"] * (1 - cap / 100), 2)
+
+
+def test_waiting_thread_gets_a_holding_reply(p02):
+    """Regression, practice run 1: P05 lost two RFQ suppliers to the 60 s rule."""
+    _, _, pkg = p02
+    cases = {c["case_id"]: c for c in json.loads(CASES.read_text(encoding="utf-8"))}
+    threads = _fixture("P05")
+    opening = {sid: [m for m in events if m.get("from") != "buyer"][:1] for sid, events in threads.items()}
+    agent = HollerauAgent(StandInClient(error=RuntimeError("no Claude needed")), pkg)
+    agent.decide(cases["case:P05"], opening)  # sees every message once
+    for mid in list(agent.seen):
+        agent.seen[mid] -= 60  # pretend a minute has passed
+    d = agent.decide(cases["case:P05"], opening)
+    assert d["message"].get("term_sheets"), "expected a counter to keep a thread alive"

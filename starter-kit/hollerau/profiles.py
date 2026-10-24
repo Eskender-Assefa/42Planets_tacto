@@ -26,6 +26,7 @@ class SegmentConfig(TypedDict, total=False):
     min_margin_pct: float
     # relationship-style targets (percent)
     anchor_below_target_pct: float
+    max_discount_from_offer_pct: float  # never ask more than this below the supplier's offer
 
 
 class CultureConfig(TypedDict):
@@ -43,6 +44,7 @@ class LLMConfig(TypedDict):
     max_tokens: int
     history_messages: int
     equivalent_sheet_pct: float  # MESO tolerance: extra sheets within this % of the cheapest
+    keepalive_s: float  # answer a waiting thread before this (60 s rule, 3 strikes)
 
 
 class PriceSearchConfig(TypedDict):

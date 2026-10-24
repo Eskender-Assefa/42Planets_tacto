@@ -311,6 +311,12 @@ def thread_envelope(
             target_price, target_terms, ct = _relationship_target(case, base, price, floor, std, est, p, proto)
         else:
             target_price, target_terms, ct = _leverage_target(case, base, price, floor, std, p, proto)
+        cap = proto["segment"].get("max_discount_from_offer_pct")
+        if cap is not None and target_price is not None and target_price < price * (1 - cap / 100):
+            # bottleneck / strategic suppliers hold the power: an ask far below their offer makes
+            # them walk (P10 in the first practice run), whatever our should-cost says
+            target_price = round(price * (1 - cap / 100), 2)
+            target_terms, ct = best_package(case, target_terms or base, target_price, std, est_for_c)
         c_target = _finite(ct)
         if floor is not None:
             c_floor = _finite(best_package(case, base, floor, std, est_for_c)[1])

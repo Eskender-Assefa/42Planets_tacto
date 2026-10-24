@@ -15,12 +15,14 @@
       "label": "Strategic - Safeguard Protocol",
       "relationship": true,
       "anchor_below_target_pct": 1.5,
+      "max_discount_from_offer_pct": 8.0,
       "guidance": "Long-term partner. Do not squeeze below its sustainable margin: that costs us. Lead with risk-sharing (index clause, payment days, horizon) and cost transparency; keep the tone collaborative."
     },
     "secure_supply": {
       "label": "Bottleneck - Protection Protocol",
       "relationship": true,
       "anchor_below_target_pct": 1.0,
+      "max_discount_from_offer_pct": 5.0,
       "guidance": "Supply security first: few or no alternatives. Secure volume, lead time and horizon; pay a fair price, keep the supplier healthy, never threaten to walk."
     },
     "quality_first": {
@@ -59,5 +61,5 @@
   "full_cost_estimate": {"use_lower_bound": true},
   "relationship_price_search": {"low_pct_of_offer": 85.0, "steps": 300},
   "telemetry": {"stalled_velocity_pct": 0.1, "yielding_velocity_pct": 0.5},
-  "llm": {"timeout_s": 35.0, "max_tokens": 4000, "history_messages": 6, "equivalent_sheet_pct": 0.3}
+  "llm": {"timeout_s": 35.0, "max_tokens": 4000, "history_messages": 6, "equivalent_sheet_pct": 0.3, "keepalive_s": 25.0}
 }

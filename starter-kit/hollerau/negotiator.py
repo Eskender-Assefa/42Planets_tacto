@@ -133,6 +133,7 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         self.case_brief = ""
         self.cited: set[str] = set()
         self.c_open: float | None = None
+        self.seen: dict[str, float] = {}  # supplier message_id -> when this agent first saw it
 
     # -- per case ------------------------------------------------------------------------------
 
@@ -174,6 +175,7 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         self.case_brief = str(super().prepare(case))  # type: ignore[no-untyped-call]
         self.cited = set()
         self.c_open = None
+        self.seen = {}
         return state
 
     def _seconds_left(self) -> float | None:
@@ -224,13 +226,21 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
             d = closing_move(case, threads)
             return self._with_audit(case, d, env, tel, "closing", "Wave cap near.", "Close on the best sheet.")
 
-        rule = self._rule_accept(case, env, tel)
+        rule = self._rule_accept(case, threads, env, tel)
         if rule is not None:
             decision, (observed, intent) = rule
             return self._with_audit(case, decision, env, tel, "rule", observed, intent)
 
+        # 60 s rule per thread: three late replies end it (P05: two RFQ suppliers lost to neglect).
+        # A thread waiting too long gets a fast Python holding counter - unless it is our best
+        # supplier, then Claude is asked about that thread only.
+        neglected = self._neglected_thread(threads, live)
+        if neglected is not None and neglected != env["best_supplier"] and len(live) > 1:
+            return self._fallback(case, threads, env, tel, neglected, "Thread close to the 60 s limit.")
+        focus = [neglected] if neglected is not None else None
+
         try:
-            raw, latency = self._ask_claude(case, threads, env, tel, secs)
+            raw, latency = self._ask_claude(case, threads, env, tel, secs, focus)
             checked = self._validate(case, threads, env, tel, raw, latency)
         except (anthropic.APIError, ValueError, KeyError, TypeError, StopIteration) as e:
             log.warning("Claude unavailable or invalid (%s) - deterministic move", e)
@@ -240,30 +250,82 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         self._remember_citations(checked)
         return checked
 
-    def _rule_accept(
-        self, case: JSONObject, env: Envelope, tel: dict[str, Telemetry]
-    ) -> tuple[JSONObject, tuple[str, str]] | None:
-        """Python accepts outright when a standing sheet already meets our target, or when the
-        supplier has agreed to our own sheet (pushing on after that risks the walk-away)."""
-        alt, c_open = env["c_alt"], env["c_open"]
-        for sid, te in env["threads"].items():
-            c, target = te["c_true_standing"], te["c_target"]
-            agreed = tel[sid]["status"] == "agreed"
-            if te["sheet_id"] is None or c is None:
+    def _neglected_thread(self, threads: Threads, live: list[str]) -> str | None:
+        """The live thread whose unanswered supplier message has waited longest, if longer than
+        the keep-alive limit. Arrival times are when this agent first saw each message."""
+        now = time.monotonic()
+        oldest: tuple[float, str] | None = None
+        for sid in live:
+            events = threads.get(sid, [])
+            for m in events:
+                mid = m.get("message_id")
+                if m.get("from") != "buyer" and isinstance(mid, str):
+                    self.seen.setdefault(mid, now)
+            last = events[-1] if events else None
+            mid = last.get("message_id") if last else None
+            if last is None or last.get("from") == "buyer" or not isinstance(mid, str):
                 continue
-            if not agreed and (target is None or c > target):
+            age = now - self.seen[mid]
+            if oldest is None or age > oldest[0]:
+                oldest = (age, sid)
+        limit = config()["llm"]["keepalive_s"]
+        return oldest[1] if oldest and oldest[0] > limit else None
+
+    def _rule_accept(
+        self, case: JSONObject, threads: Threads, env: Envelope, tel: dict[str, Telemetry]
+    ) -> tuple[JSONObject, tuple[str, str]] | None:
+        """Python accepts outright when
+        - a standing sheet already meets our target,
+        - the supplier agreed to our own sheet, or
+        - the supplier made its final_offer (pushing after that makes it walk - P05/P10 in the
+          first practice run) and that offer is the cheapest live one.
+        Always only if it beats the alternative and C_open and keeps the must-haves."""
+        alt, c_open = env["c_alt"], env["c_open"]
+        priced = [x["c_true_standing"] for x in env["threads"].values() if x["c_true_standing"] is not None]
+        cheapest_live = min(priced) if priced else None
+        for sid, te in env["threads"].items():
+            status = tel[sid]["status"]
+            sheet_id, terms, c = te["sheet_id"], te["standing_terms"], te["c_true_standing"]
+            if status == "final_offer":  # it may offer several sheets: take the cheapest for us
+                best = self._cheapest_latest_sheet(case, threads[sid], te)
+                if best is not None:
+                    sheet_id, terms, c = best
+            if sheet_id is None or c is None:
+                continue
+            target = te["c_target"]
+            if status == "final_offer":
+                if cheapest_live is not None and c > cheapest_live + 0.01:
+                    continue  # another supplier is cheaper: keep negotiating there
+            elif status != "agreed" and (target is None or c > target):
                 continue
             if (alt is not None and c >= alt) or (c_open is not None and c >= c_open):
                 continue
-            if not must_haves_ok(case, te["standing_terms"], te["standard"]):
+            if not must_haves_ok(case, terms, te["standard"]):
                 continue
             d: JSONObject = {
                 "supplier_id": sid,
-                "message": {"action": {"type": "accept", "term_sheet_id": te["sheet_id"]}},
+                "message": {"action": {"type": "accept", "term_sheet_id": sheet_id}},
             }
-            why = "Supplier agreed to our sheet." if agreed else "Standing sheet already at or below our target."
-            return d, (why, "Accept: further pushing risks the deal.")
+            why = {
+                "agreed": "Supplier agreed to our sheet.",
+                "final_offer": "Supplier declared its final offer.",
+            }.get(status or "", "Standing sheet already at or below our target.")
+            return d, (why, "Accept: further pushing risks the walk-away.")
         return None
+
+    def _cheapest_latest_sheet(
+        self, case: JSONObject, events: list[Message], te: ThreadEnvelope
+    ) -> tuple[str, JSONObject, float] | None:
+        last = next((m for m in reversed(events) if m.get("from") != "buyer"), None)
+        sheets = last.get("term_sheets") if last else None
+        best: tuple[str, JSONObject, float] | None = None
+        for s in sheets if isinstance(sheets, list) else []:
+            sid, terms = (s.get("term_sheet_id"), s.get("terms")) if isinstance(s, dict) else (None, None)
+            if isinstance(sid, str) and isinstance(terms, dict):
+                c = safe_cost(case, terms, te["standard"], te["supplier_estimate"])
+                if best is None or c < best[2]:
+                    best = (sid, terms, c)
+        return best
 
     # -- Claude --------------------------------------------------------------------------------
 
@@ -311,7 +373,13 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         }
 
     def _ask_claude(
-        self, case: JSONObject, threads: Threads, env: Envelope, tel: dict[str, Telemetry], secs: float | None
+        self,
+        case: JSONObject,
+        threads: Threads,
+        env: Envelope,
+        tel: dict[str, Telemetry],
+        secs: float | None,
+        focus: list[str] | None = None,
     ) -> tuple[JSONObject, int]:
         cfg = config()["llm"]
         t0 = time.monotonic()
@@ -319,8 +387,11 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
             {"type": "text", "text": SYSTEM},
             {"type": "text", "text": self.case_brief, "cache_control": {"type": "ephemeral"}},  # per case
         ]
-        messages: list[BetaMessageParam] = [{"role": "user", "content": self._render(case, threads, env, tel, secs)}]
-        schema = cast(dict[str, object], self._schema(case, list(env["threads"])))
+        prompt = self._render(case, threads, env, tel, secs)
+        if focus:
+            prompt += f"\nThis turn you must write to {focus[0]}: its reply is close to the 60-second limit."
+        messages: list[BetaMessageParam] = [{"role": "user", "content": prompt}]
+        schema = cast(dict[str, object], self._schema(case, focus or list(env["threads"])))
         output: BetaOutputConfigParam = {"effort": self.effort, "format": {"type": "json_schema", "schema": schema}}
         resp = self.client.beta.messages.create(
             model=self.model,
@@ -491,9 +562,18 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
             log.info("dropped %d non-equivalent sheet(s)", len(priced) - len(kept))
         return kept
 
-    def _fallback(self, case: JSONObject, threads: Threads, env: Envelope, tel: dict[str, Telemetry]) -> JSONObject:
-        """No Claude (timeout, outage, vetoed move): counter at the engine's target sheet."""
-        sid = env["best_supplier"] or next(iter(env["threads"]), None)
+    def _fallback(
+        self,
+        case: JSONObject,
+        threads: Threads,
+        env: Envelope,
+        tel: dict[str, Telemetry],
+        sid: str | None = None,
+        reason: str = "No model answer this turn.",
+    ) -> JSONObject:
+        """No Claude (timeout, outage, vetoed move) or a thread to keep alive: counter at the
+        engine's target sheet."""
+        sid = sid or env["best_supplier"] or next(iter(env["threads"]), None)
         if sid is None:
             return closing_move(case, threads)
         te, t = env["threads"][sid], tel[sid]
@@ -513,9 +593,7 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
             "supplier_id": sid,
             "message": {"subject": f"Re: {title}", "body": body, "term_sheets": [{"terms": terms}]},
         }
-        return self._with_audit(
-            case, d, env, tel, "fallback", "No model answer this turn.", "Counter at the engine's target sheet."
-        )
+        return self._with_audit(case, d, env, tel, "fallback", reason, "Counter at the engine's target sheet.")
 
     # -- audit ---------------------------------------------------------------------------------
 
