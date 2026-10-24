@@ -11,7 +11,7 @@ from collections.abc import Mapping, Sequence
 
 import httpx
 
-from .types import AuditLogRow, CaseRow, SupplierRow
+from .types import AuditLogRow, CaseRow, CaseUpdate, SupplierRow
 
 log = logging.getLogger("hollerau.db")
 
@@ -91,6 +91,28 @@ class SupabaseDB:
         out = self._request("POST", "audit_logs", body=row, prefer="return=representation")
         if not out:
             raise DBError("audit insert returned no row - write not verified")
+        return out[0]
+
+    def replace_audit(self, row: AuditLogRow) -> Row:
+        """Overwrite the audit row of a move slot that was logged but never reached the supplier
+        (the arena refused it with a 409 and the agent decided again for the same turn)."""
+        out = self._request(
+            "POST",
+            "audit_logs",
+            params={"on_conflict": "session_id,supplier_id,turn_number"},
+            body=row,
+            prefer="resolution=merge-duplicates,return=representation",
+        )
+        if not out:
+            raise DBError("audit upsert returned no row - write not verified")
+        return out[0]
+
+    def update_case(self, session_id: str, changes: CaseUpdate) -> Row:
+        out = self._request(
+            "PATCH", "cases", params={"session_id": f"eq.{session_id}"}, body=changes, prefer="return=representation"
+        )
+        if not out:
+            raise DBError(f"case {session_id} not found for update")
         return out[0]
 
     def select(self, table: str, **filters: str) -> list[Row]:

@@ -48,6 +48,19 @@ class CaseRow(TypedDict):
     ended_at: NotRequired[str | None]
 
 
+class CaseUpdate(TypedDict, total=False):
+    """Columns the runner fills in when a case ends."""
+
+    status: CaseStatus
+    deal_supplier_id: str | None
+    c_open: float | None
+    c_alt: float | None
+    c_best: float | None
+    c_deal: float | None
+    score: float | None
+    ended_at: str
+
+
 class AuditLogRow(TypedDict):
     """Insert shape of `audit_logs`; id and created_at come from the DB."""
 
