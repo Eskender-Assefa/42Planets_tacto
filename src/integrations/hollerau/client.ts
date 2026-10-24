@@ -2,7 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 import { HOLLERAU_SUPABASE_URL, HOLLERAU_SUPABASE_ANON_KEY } from "./config";
 import type { AuditLog, Case, CaseOverview, Supplier, WaveScore } from "./types";
 
-type ReadOnlyTable<R> = { Row: R; Insert: Partial<R>; Update: Partial<R>; Relationships: [] };
+type ReadOnlyTable<R> = { Row: R & Record<string, unknown>; Insert: Record<string, unknown>; Update: Record<string, unknown>; Relationships: [] };
 
 type HollerauDatabase = {
   __InternalSupabase: { PostgrestVersion: "14.18" };
