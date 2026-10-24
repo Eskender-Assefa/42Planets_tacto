@@ -21,6 +21,7 @@ from .package_types import (
     PackageSupplier,
     Part,
     PriceCondition,
+    Quote,
     Scorecard,
     ShouldCost,
     SupplierBundle,
@@ -141,6 +142,11 @@ class Package:
     def index_values(self, series_id: str) -> list[IndexValue]:
         rows = self._query("SELECT * FROM index_values WHERE series_id = ? ORDER BY month", (series_id,))
         return [_as(IndexValue, r) for r in rows]
+
+    def quotes(self, part_id: str) -> list[Quote]:
+        """Every quotation for the part, newest first (this supplier's own and rivals')."""
+        rows = self._query("SELECT * FROM quotes WHERE part_id = ? ORDER BY quote_date DESC", (part_id,))
+        return [_as(Quote, r) for r in rows]
 
     def news(self, supplier_id: str) -> list[NewsItem]:
         rows = self._query("SELECT * FROM news WHERE supplier_id = ? ORDER BY date DESC", (supplier_id,))

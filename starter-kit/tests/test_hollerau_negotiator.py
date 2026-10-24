@@ -27,7 +27,10 @@ class StandInClient:
         if self.error:
             raise self.error
         block = SimpleNamespace(type="text", text=json.dumps(self.reply))
-        return SimpleNamespace(stop_reason="end_turn", content=[block])
+        usage = SimpleNamespace(
+            input_tokens=0, output_tokens=0, cache_read_input_tokens=0, cache_creation_input_tokens=0
+        )
+        return SimpleNamespace(stop_reason="end_turn", content=[block], usage=usage)
 
 
 @pytest.fixture(scope="module")
@@ -108,12 +111,21 @@ def test_claude_outage_falls_back_to_target_counter(p02):
 
 
 def test_dearer_option_b_is_dropped(p02):
+    """Only sheets of (about) equal true C survive: a dearer extra sheet is a concession in disguise."""
+    from hollerau.envelope import envelope, safe_cost
+    from hollerau.profiles import protocol
+
     case, threads, pkg = p02
-    reply = _reply(price=360.0, payment="90")
-    reply["decision"]["term_sheets"].append({"unit_price": 366.0, "payment_days": "90", "index_clause": "none"})
+    te = envelope(case, threads, [SUP], {SUP: protocol("stabilise", "DE")}, pkg, {SUP: "DE"})["threads"][SUP]
+    reply = _reply(price=340.0, payment="90")  # deep in the supplier-health penalty zone
+    reply["decision"]["term_sheets"].append({"unit_price": 368.0, "payment_days": "90", "index_clause": "none"})
     d = HollerauAgent(StandInClient(reply), pkg).decide(case, threads)
-    prices = [s["terms"]["unit_price"] for s in d["message"]["term_sheets"]]
-    assert prices == [360.0]  # 366 would be a concession in disguise: the supplier picks it
+    kept = [s["terms"] for s in d["message"]["term_sheets"]]
+    costs = {t["unit_price"]: safe_cost(case, t, te["standard"], te["supplier_estimate"]) for t in kept}
+    assert len(kept) == 1, f"expected one surviving sheet, got {costs}"
+    for price in (340.0, 368.0):
+        terms = {**kept[0], "unit_price": price}
+        assert costs[kept[0]["unit_price"]] <= safe_cost(case, terms, te["standard"], te["supplier_estimate"]) + 0.01
 
 
 def _fixture(name):
@@ -162,3 +174,45 @@ def test_waiting_thread_gets_a_holding_reply(p02):
         agent.seen[mid] -= 60  # pretend a minute has passed
     d = agent.decide(cases["case:P05"], opening)
     assert d["message"].get("term_sheets"), "expected a counter to keep a thread alive"
+
+
+def test_own_lower_quote_is_favourable_evidence(p02):
+    """Practice run 1: Donautal offered 6.05 after quoting 5.45 (P08); Kalwisz 47.00 after 45.15
+    (P11) - citable, verified, and never used."""
+    _, _, pkg = p02
+    cases = {c["case_id"]: c for c in json.loads(CASES.read_text(encoding="utf-8"))}
+    for name, sup in (("P08", "sup:70710"), ("P11", "sup:70140")):
+        events = _fixture(name)[sup][:1]
+        client = StandInClient(_reply())
+        agent = HollerauAgent(client, pkg)
+        prompt = agent._render(*_render_args(agent, cases[f"case:{name}"], {sup: events}))
+        own = [line for line in prompt.splitlines() if "Your quotation of" in line]
+        assert own and any(line.startswith("- [favourable]") for line in own), own
+
+
+def test_supplier_alternative_sheet_is_priced_and_preferred(p02):
+    """Practice run 1: Kalwisz's '-a' alternative (46.50, 2500 ppm) was never priced."""
+    from hollerau.envelope import envelope
+    from hollerau.profiles import protocol
+
+    _, _, pkg = p02
+    cases = {c["case_id"]: c for c in json.loads(CASES.read_text(encoding="utf-8"))}
+    sup, events = "sup:70140", _fixture("P11")["sup:70140"]
+    k = next(i for i, m in enumerate(events) if len(m.get("term_sheets") or []) > 1) + 1
+    te = envelope(cases["case:P11"], {sup: events[:k]}, [sup], {sup: protocol("quality_first", "PL")}, pkg, {})
+    t = te["threads"][sup]
+    assert len(t["offers"]) == 2
+    cheapest = min(t["offers"], key=lambda o: o["c_true"])
+    assert t["sheet_id"] == cheapest["sheet_id"] and t["c_true_standing"] == cheapest["c_true"]
+
+
+def _render_args(agent, case, threads):
+    from hollerau.envelope import envelope
+    from hollerau.kit import live_threads
+    from hollerau.telemetry import telemetry
+
+    agent.state = agent._prepare_case(case)
+    live = live_threads(threads)
+    env = envelope(case, threads, live, agent.state["protocols"], agent.pkg, agent.state["countries"], None)
+    tel = {sid: telemetry(case, sid, threads[sid], env["c_open"]) for sid in live}
+    return case, threads, env, tel, None

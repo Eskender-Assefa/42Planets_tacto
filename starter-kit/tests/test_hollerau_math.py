@@ -86,9 +86,11 @@ def test_stabilise_target_never_below_floor_estimate(p02, pkg):
         t = env["threads"][SUP]
         assert t["price_floor_est"] is not None and t["target_price"] is not None
         anchor = config()["segments"]["stabilise"]["anchor_below_target_pct"]
-        assert t["target_price"] >= t["price_floor_est"] * (1 - anchor / 100) - 0.01
+        assert t["target_price"] >= min(t["price_floor_est"], t["standing_price"]) * (1 - anchor / 100) - 0.01
+        if t["price_floor_est"] >= t["standing_price"]:  # offer below a sustainable price: no squeeze
+            assert t["target_price"] == pytest.approx(t["standing_price"])
         assert t["target_price"] <= t["standing_price"]
-        assert t["c_target"] is not None and t["c_target"] < t["c_standing"]
+        assert t["c_target"] is not None and t["c_target"] <= t["c_true_standing"]
     assert env["c_open"] == pytest.approx(safe_cost(case, events[0]["term_sheets"][0]["terms"], standard_terms(events)))
 
 
@@ -121,3 +123,13 @@ def test_evidence_refs_are_citable_and_maths_is_python(pkg):
     for item in brief["items"]:
         for ref in item["refs"]:
             assert pkg.is_citable(ref) and ref in item["sentence"]
+
+
+def test_rising_index_is_never_favourable_without_an_asked_increase(pkg):
+    """P08's letter names no %: a +5.9 % alloy surcharge must not be offered as our argument."""
+    from hollerau.evidence import build_brief
+
+    brief = build_brief(pkg, "sup:70710", "part:370010", None)
+    for item in brief["items"]:
+        if item["kind"] == "index" and "+" in item["sentence"].split("changed", 1)[1][:3]:
+            assert not item["favourable"], item["sentence"]

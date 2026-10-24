@@ -44,6 +44,13 @@ class LeverOption(TypedDict):
     delta_eur: float  # C change vs. the supplier's standing sheet, same price (negative = saves us)
 
 
+class OfferOption(TypedDict):
+    sheet_id: str | None
+    terms: JSONObject
+    c: float | None  # C as the arena scores it
+    c_true: float | None  # incl. our supplier-health estimate
+
+
 class ThreadEnvelope(TypedDict):
     supplier_id: str
     sheet_id: str | None
@@ -62,6 +69,7 @@ class ThreadEnvelope(TypedDict):
     target_terms: JSONObject | None
     c_target: float | None
     levers: list[LeverOption]
+    offers: list[OfferOption]  # every sheet of the supplier's latest message, priced
 
 
 class Envelope(TypedDict):
@@ -102,6 +110,19 @@ def supplier_sheets(events: list[Message]) -> list[tuple[str | None, JSONObject]
         if isinstance(first, dict) and isinstance(first.get("terms"), dict):
             sid = first.get("term_sheet_id")
             out.append((sid if isinstance(sid, str) else None, first["terms"]))  # type: ignore[arg-type]
+    return out
+
+
+def latest_sheets(events: list[Message]) -> list[tuple[str | None, JSONObject]]:
+    """Every sheet (main + alternatives) of the supplier's latest message - the kit's standing()
+    reads only the first."""
+    last = next((m for m in reversed(events) if m.get("from") != "buyer"), None)
+    sheets = last.get("term_sheets") if last else None
+    out: list[tuple[str | None, JSONObject]] = []
+    for s in sheets if isinstance(sheets, list) else []:
+        if isinstance(s, dict) and isinstance(s.get("terms"), dict):
+            sid = s.get("term_sheet_id")
+            out.append((sid if isinstance(sid, str) else None, s["terms"]))  # type: ignore[arg-type]
     return out
 
 
@@ -251,6 +272,8 @@ def _relationship_target(
         if c < best_c:
             best_p, best_terms, best_c = round(cand, 2), terms, c
     anchor = proto["segment"].get("anchor_below_target_pct", 0.0)
+    if floor is not None and floor >= price:
+        anchor = 0.0  # its offer is already below a sustainable price: every cent less costs us (P02)
     ask = round(best_p * (1 - anchor / 100 * (1 - p)), 2)  # start a little below, land on it
     terms, c = best_package(case, best_terms, ask, std, est)
     return ask, terms, c
@@ -281,11 +304,25 @@ def thread_envelope(
     p: float,
 ) -> ThreadEnvelope:
     std = standard_terms(events)
-    sheet_id, terms = standing(events)
-    price = _num(terms.get("unit_price"))
     relationship = is_relationship_case(case, proto)
     est, ref = estimate_supplier(case, pkg, supplier_id, country, std) if relationship or pkg else (None, None)
     est_for_c = est if relationship else None
+    # Suppliers often send alternatives next to their main sheet ('offer:...-a'): the standing
+    # offer for us is the cheapest of them, not just the first (practice run 1 ignored them).
+    offers: list[OfferOption] = []
+    for oid, oterms in latest_sheets(events):
+        if _num(oterms.get("unit_price")) is None:
+            continue
+        c_o = safe_cost(case, oterms, std)
+        c_o_true = safe_cost(case, oterms, std, est_for_c)
+        offers.append({"sheet_id": oid, "terms": oterms, "c": _finite(c_o), "c_true": _finite(c_o_true)})
+    priced_offers = [o for o in offers if o["c_true"] is not None]
+    if priced_offers:
+        best_offer = min(priced_offers, key=lambda o: o["c_true"] or math.inf)
+        sheet_id, terms = best_offer["sheet_id"], best_offer["terms"]
+    else:
+        sheet_id, terms = standing(events)
+    price = _num(terms.get("unit_price"))
     sheets = [t for _, t in supplier_sheets(events) if _num(t.get("unit_price")) is not None]
     c_plain = safe_cost(case, terms, std) if price is not None else math.inf
     c_true = safe_cost(case, terms, std, est_for_c) if price is not None else math.inf
@@ -339,6 +376,7 @@ def thread_envelope(
         "target_terms": target_terms,
         "c_target": c_target,
         "levers": lever_table(case, complete_offer(case, terms), std, est_for_c) if price is not None else [],
+        "offers": offers,
     }
 
 

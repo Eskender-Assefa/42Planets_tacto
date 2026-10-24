@@ -170,6 +170,25 @@ class NewsItem(TypedDict):
     source: str | None
 
 
+class Quote(TypedDict):
+    id: str  # 'quote:<n>' - citable
+    rfq_id: str | None
+    supplier_id: str
+    part_id: str
+    quote_date: str | None
+    unit_price: float | None
+    price_unit: int | None
+    currency: str | None
+    lead_time_days: int | None
+    incoterm: str | None
+    payment_days: int | None
+    validity_days: int | None
+    tooling_eur: int | None
+    awarded: int | None
+    missing_fields: str | None
+    remarks: str | None
+
+
 class SupplierBundle(TypedDict):
     """Everything the package says about one supplier and the part under negotiation."""
 

@@ -183,7 +183,13 @@ class RecordingTable(RemoteTable):  # upstream RemoteTable is unannotated: super
         if isinstance(first, dict) and isinstance(first.get("terms"), dict):
             ours = cast(JSONObject, first["terms"])
         elif action == "accept":
-            ours = theirs  # accepting = closing on the supplier's standing sheet
+            ours = theirs  # accepting = closing on the supplier's sheet - find the one accepted
+            act = message.get("action")
+            wanted = act.get("term_sheet_id") if isinstance(act, dict) else None
+            last = next((m for m in reversed(events) if m.get("from") != "buyer"), None)
+            for s in (last.get("term_sheets") if last else None) or []:  # type: ignore[union-attr]
+                if isinstance(s, dict) and s.get("term_sheet_id") == wanted and isinstance(s.get("terms"), dict):
+                    ours = cast(JSONObject, s["terms"])
         c_theirs, c_ours = self._cost(theirs, standard), self._cost(ours, standard)
 
         reasoning = message.get(REASONING_KEY)

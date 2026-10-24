@@ -49,6 +49,8 @@ FALLBACK_BETA = "server-side-fallback-2026-07-01"
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
 EFFORTS: tuple[Effort, ...] = ("low", "medium", "high", "xhigh", "max")
 SIGNATURE = "Hollerau Pumpenwerke Procurement"
+# evidence judged against the live offer: favourable when the cited price is below offer x factor
+PRICE_EVIDENCE = {"should_cost": 0.97, "own_quote": 0.995, "rival_quote": 0.995}
 
 SYSTEM = f"""You are the lead buyer of Hollerau Pumpenwerke GmbH, a German pump maker, negotiating by
 e-mail with industrial suppliers in the Tacto Negotiation Arena. Each turn you get the case, the
@@ -82,9 +84,18 @@ Rules:
 7. accept takes the supplier's standing sheet as it is; walk_away ends the case without a deal (only
    when the alternative is clearly cheaper than every offer).
 8. Never reveal urgency, our budget, our targets, our alternative's price, our cost model's internals
-   or that an alternative is missing. Stay polite and factual; follow the CULTURE protocol. E-mail at
-   most 120 words, plain text, signed "{SIGNATURE}", no placeholders.
-9. reasoning_audit: observed_barrier = the resistance or signal you see from the supplier;
+   or that an alternative is missing (citing a quote ID listed in EVIDENCE is fine). Stay polite
+   and factual; follow the CULTURE protocol. E-mail at most 120 words, plain text, signed
+   "{SIGNATURE}", no placeholders.
+9. No bluffing: never claim a second source, competing offer, cost trend or volume without a data
+   ID from EVIDENCE backing it - suppliers answer unbacked claims with "send us the data" and do not
+   move. If the supplier asks for data, cite an ID or drop the point.
+10. Linked demands: when the supplier ties a demand to a lever you offered (e.g. an index clause
+   for a longer contract), compare PACKAGES and withdraw the lever if the demand costs more than it
+   saves.
+11. Answer the supplier's questions when the answer is cheap for us (e.g. a binding volume up to our
+   yearly need costs nothing) - it buys price.
+12. reasoning_audit: observed_barrier = the resistance or signal you see from the supplier;
    strategic_intent = why this move and package, in one or two sentences, without numbers you did
    not copy."""
 
@@ -134,6 +145,7 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         self.cited: set[str] = set()
         self.c_open: float | None = None
         self.seen: dict[str, float] = {}  # supplier message_id -> when this agent first saw it
+        self.shown_attachments: set[str] = set()
 
     # -- per case ------------------------------------------------------------------------------
 
@@ -176,6 +188,7 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         self.cited = set()
         self.c_open = None
         self.seen = {}
+        self.shown_attachments = set()
         return state
 
     def _seconds_left(self) -> float | None:
@@ -223,7 +236,7 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         tel = {sid: telemetry(case, sid, threads[sid], env["c_open"]) for sid in live}
 
         if secs is not None and secs < CLOSE_BEFORE_CAP_S:
-            d = closing_move(case, threads)
+            d = self._close(case, threads, env)
             return self._with_audit(case, d, env, tel, "closing", "Wave cap near.", "Close on the best sheet.")
 
         rule = self._rule_accept(case, threads, env, tel)
@@ -285,11 +298,8 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         cheapest_live = min(priced) if priced else None
         for sid, te in env["threads"].items():
             status = tel[sid]["status"]
+            # the envelope's standing sheet is already the cheapest of the supplier's alternatives
             sheet_id, terms, c = te["sheet_id"], te["standing_terms"], te["c_true_standing"]
-            if status == "final_offer":  # it may offer several sheets: take the cheapest for us
-                best = self._cheapest_latest_sheet(case, threads[sid], te)
-                if best is not None:
-                    sheet_id, terms, c = best
             if sheet_id is None or c is None:
                 continue
             target = te["c_target"]
@@ -312,20 +322,6 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
             }.get(status or "", "Standing sheet already at or below our target.")
             return d, (why, "Accept: further pushing risks the walk-away.")
         return None
-
-    def _cheapest_latest_sheet(
-        self, case: JSONObject, events: list[Message], te: ThreadEnvelope
-    ) -> tuple[str, JSONObject, float] | None:
-        last = next((m for m in reversed(events) if m.get("from") != "buyer"), None)
-        sheets = last.get("term_sheets") if last else None
-        best: tuple[str, JSONObject, float] | None = None
-        for s in sheets if isinstance(sheets, list) else []:
-            sid, terms = (s.get("term_sheet_id"), s.get("terms")) if isinstance(s, dict) else (None, None)
-            if isinstance(sid, str) and isinstance(terms, dict):
-                c = safe_cost(case, terms, te["standard"], te["supplier_estimate"])
-                if best is None or c < best[2]:
-                    best = (sid, terms, c)
-        return best
 
     # -- Claude --------------------------------------------------------------------------------
 
@@ -410,7 +406,15 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         data = json.loads(text)
         if not isinstance(data, dict):
             raise ValueError("reply is not a JSON object")
-        log.info("Claude decided in %d ms", latency)
+        u = resp.usage
+        log.info(
+            "Claude decided in %d ms | tokens in %s (cache read %s, write %s) out %s",
+            latency,
+            u.input_tokens,
+            getattr(u, "cache_read_input_tokens", None),
+            getattr(u, "cache_creation_input_tokens", None),
+            u.output_tokens,
+        )
         return cast(JSONObject, data), latency
 
     def _render(
@@ -439,6 +443,9 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
                 )
                 + f"; estimated supplier floor price {te['price_floor_est'] or 'unknown'}"
                 + f"; TARGET this round: {json.dumps(te['target_terms'])} -> C {_eur(te['c_target'])}.",
+                "SUPPLIER OFFERS (every sheet of its latest message, our C): "
+                + "; ".join(f"{o['sheet_id']} {json.dumps(o['terms'])} -> C {_eur(o['c'])}" for o in te["offers"]),
+                self._packages(case, te),
                 "LEVERS (EUR change in our C vs. their standing sheet, same price; negative = saves us): "
                 + "; ".join(f"{lv['field']}={option_label(lv['value'])}: {lv['delta_eur']:+,.0f}" for lv in levers),
                 f"TELEMETRY: status {t['status']}, mindset {t['mindset']}, concession velocity "
@@ -450,9 +457,10 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
                 out.append("EVIDENCE (copy figures exactly):")
                 for item in brief["items"]:
                     fav = item["favourable"]
-                    if item["kind"] == "should_cost" and te["standing_price"]:
-                        sc = self.pkg.should_cost(brief["part_id"] or "", sid) if self.pkg else None
-                        fav = bool(sc and sc["unit_cost"] and sc["unit_cost"] < te["standing_price"] * 0.97)
+                    ref_price = item.get("price")
+                    if item["kind"] in PRICE_EVIDENCE and te["standing_price"] and ref_price:
+                        # a quote or cost below the live offer argues for us; above it, against us
+                        fav = ref_price < te["standing_price"] * PRICE_EVIDENCE[item["kind"]]
                     if item["refs"] and set(item["refs"]) <= self.cited:
                         continue
                     tag = (
@@ -466,11 +474,44 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
                 head = {k: m.get(k) for k in ("status", "term_sheets", "claim_results", "missing_fields") if m.get(k)}
                 out.append(f"--- {m.get('from')}: {json.dumps(head)}\n{str(m.get('body') or '')[:900]}")
                 for att in m.get("attachments") or []:  # type: ignore[union-attr]
-                    if isinstance(att, dict):
-                        out.append(f"[attachment {att.get('name')}]\n{str(att.get('text') or '')[:1200]}")
+                    if not isinstance(att, dict):
+                        continue
+                    aid = str(att.get("attachment_id") or att.get("name"))
+                    if aid in self.shown_attachments:  # sent once: saves tokens on every later turn
+                        out.append(f"[attachment {att.get('name')} - shown in an earlier turn]")
+                        continue
+                    self.shown_attachments.add(aid)
+                    out.append(f"[attachment {att.get('name')}]\n{str(att.get('text') or '')[:1200]}")
         out.append(f"\nALREADY CITED (never cite again): {sorted(self.cited) or 'none'}")
         out.append("Decide the next move now.")
         return "\n".join(out)
+
+    def _packages(self, case: JSONObject, te: ThreadEnvelope) -> str:
+        """Linked demands made visible: the supplier's own structure at our target price vs. our best
+        package at the same price - the difference is what its non-price demands cost us."""
+        if te["target_price"] is None or not te["standing_terms"]:
+            return "PACKAGES: -"
+        theirs = complete_offer(case, {**te["standing_terms"], "unit_price": te["target_price"]})
+        c_theirs = safe_cost(case, theirs, te["standard"], te["supplier_estimate"])
+        lines = [
+            f"their structure at our target price {json.dumps(theirs)} -> C {_eur(c_theirs)}",
+            f"our best package at that price {json.dumps(te['target_terms'])} -> C {_eur(te['c_target'])}",
+        ]
+        return "PACKAGES (same price, different non-price terms): " + "; ".join(lines)
+
+    def _close(self, case: JSONObject, threads: Threads, env: Envelope) -> JSONObject:
+        """Time-cap close on the cheapest sheet (incl. alternatives) that beats the alternative,
+        else the kit's closing move (walk away)."""
+        alt = env["c_alt"]
+        best = None
+        for sid, te in env["threads"].items():
+            c = te["c_true_standing"]
+            if te["sheet_id"] and c is not None and (alt is None or c < alt):
+                if must_haves_ok(case, te["standing_terms"], te["standard"]) and (best is None or c < best[0]):
+                    best = (c, sid, te["sheet_id"])
+        if best is None:
+            return closing_move(case, threads)
+        return {"supplier_id": best[1], "message": {"action": {"type": "accept", "term_sheet_id": best[2]}}}
 
     # -- Python gates --------------------------------------------------------------------------
 
@@ -521,6 +562,10 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
             if c is None or (target is not None and c > target * 1.002 and not late):
                 log.info("accept vetoed: C %s above target %s and the case is not late", c, target)
                 return None  # deterministic counter instead
+            msg = d.get("message")
+            action_obj = msg.get("action") if isinstance(msg, dict) else None
+            if isinstance(action_obj, dict) and te["sheet_id"]:
+                action_obj["term_sheet_id"] = te["sheet_id"]  # cheapest of its alternatives
         elif action == "walk_away":
             alt = env["c_alt"]
             offers = [x["c_true_standing"] for x in env["threads"].values() if x["c_true_standing"] is not None]
@@ -578,7 +623,7 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
             return closing_move(case, threads)
         te, t = env["threads"][sid], tel[sid]
         if te["target_terms"] is None or t["moves_left"] <= 1 or t["mindset"] == "critical_breakoff":
-            d = closing_move(case, threads)
+            d = self._close(case, threads, env)
             return self._with_audit(case, d, env, tel, "fallback", "Last chance to close.", "Close on the best sheet.")
         terms = complete_offer(case, te["target_terms"])
         price = _num(terms.get("unit_price"))

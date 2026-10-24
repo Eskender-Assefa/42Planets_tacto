@@ -7,20 +7,24 @@ apart, ending within the last 12 months of the data.
 """
 
 import logging
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 
 from .package import Package, PackageError
 
 log = logging.getLogger("hollerau.evidence")
 
 WINDOW_MONTHS = 12
+QUOTES_PER_KIND = 2
 
 
 class Evidence(TypedDict):
-    kind: str  # 'index' | 'index_basket' | 'scorecard' | 'should_cost' | 'news' | 'history'
+    kind: (
+        str  # 'index' | 'index_basket' | 'scorecard' | 'should_cost' | 'own_quote' | 'rival_quote' | 'news' | 'history'
+    )
     sentence: str
     refs: list[str]  # citable IDs in the sentence (empty: context only, do not cite)
     favourable: bool  # supports a lower price / better terms for us
+    price: NotRequired[float | None]  # quotes / should-cost: judged against the live offer per turn
 
 
 class Brief(TypedDict):
@@ -68,7 +72,8 @@ def build_brief(pkg: Package, supplier_id: str, part_id: str | None, asked_pct: 
                 change, sentence, a, b = got
                 weighted += d["weight"] * change
                 weights += d["weight"]
-                fav = asked_pct is None or change < asked_pct
+                # for us only if the driver fell, or rose less than the increase asked for
+                fav = change <= 0 if asked_pct is None else change < asked_pct
                 items.append({"kind": "index", "sentence": sentence, "refs": [a, b], "favourable": fav})
             if weights:
                 justified = round(weighted, 2)  # share-weighted: drivers cover `weights` of the cost
@@ -81,7 +86,7 @@ def build_brief(pkg: Package, supplier_id: str, part_id: str | None, asked_pct: 
                             + (f", against the {asked_pct:.1f}% you ask." if asked_pct is not None else ".")
                         ),
                         "refs": [],
-                        "favourable": asked_pct is None or justified < asked_pct,
+                        "favourable": justified <= 0 if asked_pct is None else justified < asked_pct,
                     }
                 )
             sc = pkg.should_cost(part_id, supplier_id)
@@ -92,6 +97,39 @@ def build_brief(pkg: Package, supplier_id: str, part_id: str | None, asked_pct: 
                         "sentence": f"Our cost model puts the full cost at EUR {sc['unit_cost']:,.2f} ({sc['id']}).",
                         "refs": [sc["id"]],
                         "favourable": False,  # decided per turn against the offer by the negotiator
+                        "price": sc["unit_cost"],
+                    }
+                )
+        if part_id:  # quotations for the same part: its own earlier price and rivals' prices
+            all_quotes = [q for q in pkg.quotes(part_id) if q["unit_price"] is not None and q["quote_date"]]
+            newest = max((q["quote_date"] or "" for q in all_quotes), default="")
+            cutoff = f"{int(newest[:4]) - 1}{newest[4:]}" if newest else ""
+            quotes = [q for q in all_quotes if (q["quote_date"] or "") >= cutoff]  # stale quotes read as irrelevant
+            own = [q for q in quotes if q["supplier_id"] == supplier_id][:QUOTES_PER_KIND]
+            rivals = [q for q in quotes if q["supplier_id"] != supplier_id][:QUOTES_PER_KIND]
+            for q in own:
+                items.append(
+                    {
+                        "kind": "own_quote",
+                        "sentence": (
+                            f"Your quotation of {q['quote_date']} was EUR {q['unit_price']:,.2f} per unit ({q['id']})."
+                        ),
+                        "refs": [q["id"]],
+                        "favourable": False,  # decided per turn against the offer by the negotiator
+                        "price": q["unit_price"],
+                    }
+                )
+            for q in rivals:
+                items.append(
+                    {
+                        "kind": "rival_quote",
+                        "sentence": (
+                            f"A qualified quotation of {q['quote_date']} offers EUR {q['unit_price']:,.2f} "
+                            f"per unit ({q['id']})."
+                        ),
+                        "refs": [q["id"]],
+                        "favourable": False,
+                        "price": q["unit_price"],
                     }
                 )
         bundle = pkg.supplier_bundle(supplier_id, part_id)
