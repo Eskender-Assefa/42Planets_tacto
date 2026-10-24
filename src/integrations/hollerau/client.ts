@@ -5,6 +5,7 @@ import type { AuditLog, Case, CaseOverview, Supplier, WaveScore } from "./types"
 type ReadOnlyTable<R> = { Row: R; Insert: never; Update: never; Relationships: [] };
 
 type HollerauDatabase = {
+  __InternalSupabase: { PostgrestVersion: "14.18" };
   public: {
     Tables: {
       suppliers: ReadOnlyTable<Supplier>;
