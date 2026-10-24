@@ -42,6 +42,7 @@ class LLMConfig(TypedDict):
     timeout_s: float
     max_tokens: int
     history_messages: int
+    equivalent_sheet_pct: float  # MESO tolerance: extra sheets within this % of the cheapest
 
 
 class PriceSearchConfig(TypedDict):

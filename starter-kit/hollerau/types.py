@@ -1,10 +1,25 @@
-"""Row shapes of the Supabase schema (db/migrations/001_init.sql). Mirrors db/types.ts."""
+"""Row shapes of the Supabase schema (db/migrations/001-003). Mirrors db/types.ts."""
 
 from typing import Literal, NotRequired, TypedDict
 
 Environment = Literal["sim", "practice", "final"]
 CaseStatus = Literal["active", "deal", "walked_away", "no_deal", "error"]
 MoveAction = Literal["send", "accept", "walk_away"]
+DecisionSource = Literal["claude", "fallback", "rule", "closing", "naive"]
+
+
+class IndexClause(TypedDict):
+    series: str
+    material_share: float
+    deadband_pct: float
+    base_month: str
+
+
+class ClaimTally(TypedDict):
+    verified: int
+    irrelevant: int
+    contradicted: int
+    duplicate: int
 
 
 class Terms(TypedDict, total=False):
@@ -14,9 +29,11 @@ class Terms(TypedDict, total=False):
     payment_days: int | None
     lead_time_days: int | None
     incoterm: str | None
-    index_clause: str | None
+    index_clause: IndexClause | None
     tooling_eur: float | None
     effective_date: str | None
+    ppm_commitment: float | None
+    chargeback_eur_per_complaint: float | None
 
 
 class SupplierRow(TypedDict):
@@ -46,10 +63,12 @@ class CaseRow(TypedDict):
     c_deal: NotRequired[float | None]
     score: NotRequired[float | None]
     ended_at: NotRequired[str | None]
+    segment_protocol: NotRequired[str | None]
+    culture_protocol: NotRequired[str | None]
 
 
 class CaseUpdate(TypedDict, total=False):
-    """Columns the runner fills in when a case ends."""
+    """Columns the runner fills in during and at the end of a case."""
 
     status: CaseStatus
     deal_supplier_id: str | None
@@ -59,6 +78,8 @@ class CaseUpdate(TypedDict, total=False):
     c_deal: float | None
     score: float | None
     ended_at: str
+    segment_protocol: str | None
+    culture_protocol: str | None
 
 
 class AuditLogRow(TypedDict):
@@ -80,3 +101,9 @@ class AuditLogRow(TypedDict):
     supplier_mindset: NotRequired[str | None]
     message_subject: NotRequired[str | None]
     message_body: NotRequired[str | None]
+    c_target: NotRequired[float | None]
+    c_floor_est: NotRequired[float | None]
+    penalty_at_offer: NotRequired[float | None]
+    claims: NotRequired[ClaimTally | None]
+    decision_source: NotRequired[DecisionSource | None]
+    llm_latency_ms: NotRequired[int | None]

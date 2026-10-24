@@ -1,0 +1,591 @@
+"""Step 4 of the turn - the Hollerau negotiator: Python computes, Claude decides and writes.
+
+Per turn (project_context.docx chronology):
+  1 ingest     the thread as arena_kit.play.play() hands it over
+  2 telemetry  hollerau.telemetry (velocity, mindset, claim verdicts, clock)
+  3 maths      hollerau.envelope (C, true C, floor estimate, target, lever values) - no LLM
+  4 decide     time-cap close / Python rule accept, else Claude -> ONE dual-JSON object
+               {"reasoning_audit": {...}, "decision": {...}} (schema-enforced), then Python gates
+  5 log        message["reasoning_audit"] -> hollerau.recorder writes it BEFORE the send
+  6 dispatch   play() sends the message (RecordingTable strips the audit first)
+
+Claude never computes: every figure it may use is in the prompt, and the audit's
+mathematical_justification is written here from the engine's numbers.
+"""
+
+import json
+import logging
+import os
+import time
+from collections.abc import Callable
+from typing import Literal, TypedDict, cast
+
+import anthropic
+from anthropic.types.beta import BetaMessageParam, BetaOutputConfigParam, BetaTextBlockParam
+
+from arena_kit.agents.llm import ID_RE, LLMAgent
+
+from .envelope import Envelope, ThreadEnvelope, envelope, safe_cost
+from .evidence import Brief, build_brief
+from .kit import (
+    JSONObject,
+    JSONValue,
+    Message,
+    Threads,
+    closing_move,
+    complete_offer,
+    live_threads,
+    must_haves_ok,
+)
+from .package import Package, PackageError
+from .profiles import Protocol, config, protocol
+from .telemetry import Telemetry, telemetry
+from .types import DecisionSource
+
+log = logging.getLogger("hollerau.negotiator")
+
+CLOSE_BEFORE_CAP_S = 90  # arena_kit.play.CLOSE_BEFORE_CAP_S
+FALLBACK_BETA = "server-side-fallback-2026-07-01"
+Effort = Literal["low", "medium", "high", "xhigh", "max"]
+EFFORTS: tuple[Effort, ...] = ("low", "medium", "high", "xhigh", "max")
+SIGNATURE = "Hollerau Pumpenwerke Procurement"
+
+SYSTEM = f"""You are the lead buyer of Hollerau Pumpenwerke GmbH, a German pump maker, negotiating by
+e-mail with industrial suppliers in the Tacto Negotiation Arena. Each turn you get the case, the
+financial envelope computed by our cost engine, supplier telemetry, data-backed evidence and the
+thread. You choose the next move and write the e-mail.
+
+Scoring: the arena prices every deal with a published cost function C (price, payment terms,
+freight, index clause, uncovered need and - in strategic and bottleneck cases - a charge for leaving
+the supplier below a sustainable margin). Lower C is better. A deal costing more than C_open scores
+nothing; no deal scores nothing unless the alternative is cheaper.
+
+Rules:
+1. Numbers come from the engine, never from you. Do not calculate. Use only prices, euro figures and
+   percentages shown in ENVELOPE, LEVERS or EVIDENCE, copied exactly.
+2. Term sheets bind; the e-mail explains them. Mention a price in the e-mail only if it is in one of
+   your term sheets.
+3. Propose 1-3 term sheets. Several sheets must be equally good for us (about the same C,
+   different shape, e.g. lower price with shorter payment vs. higher price with longer payment) -
+   the supplier picks the one it likes, so never add a dearer fallback option. Ask near the
+   TARGET; never ask a price above the supplier's standing
+   price; in strategic and bottleneck cases never go below the supplier's estimated floor (it costs
+   us and they may walk).
+4. Trade, don't only haggle: offer levers that are cheap for us (negative or small EUR in LEVERS) in
+   return for price; avoid levers that are expensive for us unless the price drop more than pays for
+   them.
+5. Evidence: cite at most 3 data IDs per e-mail, each with its figure in the same sentence, copied
+   from EVIDENCE. Never cite an ID under ALREADY CITED or an item marked context-only. Use only
+   favourable evidence.
+6. Read the supplier: stalled -> change the package, not just the price; final_offer or critical ->
+   one last small push at most, then close; yielding -> keep your concessions small.
+7. accept takes the supplier's standing sheet as it is; walk_away ends the case without a deal (only
+   when the alternative is clearly cheaper than every offer).
+8. Never reveal urgency, our budget, our targets, our alternative's price, our cost model's internals
+   or that an alternative is missing. Stay polite and factual; follow the CULTURE protocol. E-mail at
+   most 120 words, plain text, signed "{SIGNATURE}", no placeholders.
+9. reasoning_audit: observed_barrier = the resistance or signal you see from the supplier;
+   strategic_intent = why this move and package, in one or two sentences, without numbers you did
+   not copy."""
+
+
+class CaseState(TypedDict):
+    case_id: str
+    protocols: dict[str, Protocol]
+    countries: dict[str, str | None]
+    briefs: dict[str, Brief]
+    labels: dict[str, dict[str, JSONValue]]  # field -> option label -> option value
+
+
+def option_label(value: JSONValue) -> str:
+    if value is None:
+        return "none"
+    if isinstance(value, dict):
+        share, band = value.get("material_share"), value.get("deadband_pct")
+        share_s = f"{share:.0%}" if isinstance(share, int | float) else "?"
+        return f"{value.get('series')} index clause, {share_s} material share, {band}% deadband"
+    return str(value)
+
+
+def _eur(v: float | None) -> str:
+    return "n/a" if v is None else f"EUR {v:,.2f}"
+
+
+def _num(v: JSONValue) -> float | None:
+    return float(v) if isinstance(v, int | float) and not isinstance(v, bool) else None
+
+
+class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() calls are marked
+    def __init__(
+        self,
+        client: anthropic.Anthropic,
+        pkg: Package | None,
+        model: str | None = None,
+        effort: str | None = None,
+        deadline: Callable[[], float | None] | None = None,
+    ) -> None:
+        super().__init__(None, pkg.data if pkg else None)  # type: ignore[no-untyped-call]
+        self.client, self.pkg, self.deadline = client, pkg, deadline
+        self.model = model or os.environ.get("LLM_MODEL") or "claude-opus-5-5"
+        e = effort or os.environ.get("LLM_EFFORT") or "low"
+        self.effort: Effort = next((x for x in EFFORTS if x == e), "low")
+        self.state: CaseState | None = None
+        self.case_brief = ""
+        self.cited: set[str] = set()
+        self.c_open: float | None = None
+
+    # -- per case ------------------------------------------------------------------------------
+
+    def _prepare_case(self, case: JSONObject) -> CaseState:
+        """Before the clock matters: protocols, evidence and the cached case brief."""
+        suppliers = [str(s) for s in case.get("suppliers") or []]  # type: ignore[union-attr]
+        parts = case.get("parts")
+        part = str(parts[0]) if isinstance(parts, list) and len(parts) == 1 else None
+        buyer = case.get("buyer")
+        goal = buyer.get("category_goal") if isinstance(buyer, dict) else None
+        countries: dict[str, str | None] = {}
+        asked: dict[str, float | None] = {}
+        trigger = case.get("trigger_doc")
+        for sid in suppliers:
+            try:
+                countries[sid] = self.pkg.supplier(sid)["country"] if self.pkg else None
+            except PackageError:
+                countries[sid] = None
+        if self.pkg and isinstance(trigger, str):
+            try:
+                doc = self.pkg.trigger_document(trigger)
+                if doc["supplier_id"]:
+                    asked[doc["supplier_id"]] = doc["asked_pct"]
+            except PackageError as e:
+                log.warning("trigger document %s: %s", trigger, e)
+        opts = case.get("term_options")
+        labels: dict[str, dict[str, JSONValue]] = {}
+        if isinstance(opts, dict):
+            for field, values in opts.items():
+                if isinstance(values, list):
+                    labels[field] = {option_label(v): v for v in values}
+        state: CaseState = {
+            "case_id": str(case.get("case_id")),
+            "protocols": {sid: protocol(goal if isinstance(goal, str) else None, countries[sid]) for sid in suppliers},
+            "countries": countries,
+            "briefs": {sid: build_brief(self.pkg, sid, part, asked.get(sid)) for sid in suppliers} if self.pkg else {},
+            "labels": labels,
+        }
+        self.case_brief = str(super().prepare(case))  # type: ignore[no-untyped-call]
+        self.cited = set()
+        self.c_open = None
+        return state
+
+    def _seconds_left(self) -> float | None:
+        cap = self.deadline() if self.deadline else None
+        return max(0.0, cap - time.time()) if cap else None
+
+    # -- the turn ------------------------------------------------------------------------------
+
+    def decide(self, case: JSONObject, threads: Threads) -> JSONObject:
+        try:
+            return self._decide(case, threads)
+        except Exception:  # a bug in our layer must not lose the case
+            secs = self._seconds_left()
+            if secs is not None and secs < CLOSE_BEFORE_CAP_S:
+                log.exception("negotiator failed at the cap - kit closing move")
+                return closing_move(case, threads)
+            log.exception("negotiator failed - naive counter as safety net")
+            d = cast(JSONObject, self.fallback.decide(case, threads))  # type: ignore[no-untyped-call]
+            msg = d.get("message")
+            if isinstance(msg, dict):
+                msg["reasoning_audit"] = {
+                    "observed_barrier": "Internal error in the Hollerau layer (see runner log).",
+                    "strategic_intent": "Safety net: the kit's naive move keeps the case alive.",
+                    "mathematical_justification": "-",
+                    "decision_source": "fallback",
+                }
+            return d
+
+    def _decide(self, case: JSONObject, threads: Threads) -> JSONObject:
+        if self.state is None or self.state["case_id"] != case.get("case_id"):
+            self.state = self._prepare_case(case)
+        state = self.state
+        secs = self._seconds_left()
+        live = live_threads(threads)
+        for sid in live:  # a supplier the case file did not list (e.g. an RFQ newcomer)
+            if sid not in state["protocols"]:
+                state["protocols"][sid] = protocol(None, None)
+                state["countries"][sid] = None
+        env = envelope(case, threads, live, state["protocols"], self.pkg, state["countries"], secs)
+        # C_open is the score's zero line: freeze the first value (later quote PDFs change the
+        # standard terms the opening sheet would be priced with)
+        if self.c_open is None:
+            self.c_open = env["c_open"]
+        env["c_open"] = self.c_open
+        tel = {sid: telemetry(case, sid, threads[sid], env["c_open"]) for sid in live}
+
+        if secs is not None and secs < CLOSE_BEFORE_CAP_S:
+            d = closing_move(case, threads)
+            return self._with_audit(case, d, env, tel, "closing", "Wave cap near.", "Close on the best sheet.")
+
+        rule = self._rule_accept(case, env, tel)
+        if rule is not None:
+            decision, (observed, intent) = rule
+            return self._with_audit(case, decision, env, tel, "rule", observed, intent)
+
+        try:
+            raw, latency = self._ask_claude(case, threads, env, tel, secs)
+            checked = self._validate(case, threads, env, tel, raw, latency)
+        except (anthropic.APIError, ValueError, KeyError, TypeError, StopIteration) as e:
+            log.warning("Claude unavailable or invalid (%s) - deterministic move", e)
+            checked = None
+        if checked is None:
+            checked = self._fallback(case, threads, env, tel)
+        self._remember_citations(checked)
+        return checked
+
+    def _rule_accept(
+        self, case: JSONObject, env: Envelope, tel: dict[str, Telemetry]
+    ) -> tuple[JSONObject, tuple[str, str]] | None:
+        """Python accepts outright when a standing sheet already meets our target, or when the
+        supplier has agreed to our own sheet (pushing on after that risks the walk-away)."""
+        alt, c_open = env["c_alt"], env["c_open"]
+        for sid, te in env["threads"].items():
+            c, target = te["c_true_standing"], te["c_target"]
+            agreed = tel[sid]["status"] == "agreed"
+            if te["sheet_id"] is None or c is None:
+                continue
+            if not agreed and (target is None or c > target):
+                continue
+            if (alt is not None and c >= alt) or (c_open is not None and c >= c_open):
+                continue
+            if not must_haves_ok(case, te["standing_terms"], te["standard"]):
+                continue
+            d: JSONObject = {
+                "supplier_id": sid,
+                "message": {"action": {"type": "accept", "term_sheet_id": te["sheet_id"]}},
+            }
+            why = "Supplier agreed to our sheet." if agreed else "Standing sheet already at or below our target."
+            return d, (why, "Accept: further pushing risks the deal.")
+        return None
+
+    # -- Claude --------------------------------------------------------------------------------
+
+    def _schema(self, case: JSONObject, live: list[str]) -> JSONObject:
+        assert self.state is not None
+        neg = case.get("negotiable")
+        sheet: JSONObject = {"unit_price": {"type": "number"}}
+        for f in [str(x) for x in neg] if isinstance(neg, list) else []:
+            if f == "unit_price":
+                continue
+            labels = self.state["labels"].get(f)
+            sheet[f] = {"type": "string", "enum": list(labels)} if labels else {"type": "number"}
+        return {
+            "type": "object",
+            "properties": {
+                "reasoning_audit": {
+                    "type": "object",
+                    "properties": {"observed_barrier": {"type": "string"}, "strategic_intent": {"type": "string"}},
+                    "required": ["observed_barrier", "strategic_intent"],
+                    "additionalProperties": False,
+                },
+                "decision": {
+                    "type": "object",
+                    "properties": {
+                        "supplier_id": {"type": "string", "enum": cast(JSONValue, live)},
+                        "action": {"type": "string", "enum": ["send", "accept", "walk_away"]},
+                        "subject": {"type": "string"},
+                        "outbound_email_text": {"type": "string"},
+                        "term_sheets": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": sheet,
+                                "required": list(sheet),
+                                "additionalProperties": False,
+                            },
+                        },
+                    },
+                    "required": ["supplier_id", "action", "subject", "outbound_email_text", "term_sheets"],
+                    "additionalProperties": False,
+                },
+            },
+            "required": ["reasoning_audit", "decision"],
+            "additionalProperties": False,
+        }
+
+    def _ask_claude(
+        self, case: JSONObject, threads: Threads, env: Envelope, tel: dict[str, Telemetry], secs: float | None
+    ) -> tuple[JSONObject, int]:
+        cfg = config()["llm"]
+        t0 = time.monotonic()
+        system: list[BetaTextBlockParam] = [
+            {"type": "text", "text": SYSTEM},
+            {"type": "text", "text": self.case_brief, "cache_control": {"type": "ephemeral"}},  # per case
+        ]
+        messages: list[BetaMessageParam] = [{"role": "user", "content": self._render(case, threads, env, tel, secs)}]
+        schema = cast(dict[str, object], self._schema(case, list(env["threads"])))
+        output: BetaOutputConfigParam = {"effort": self.effort, "format": {"type": "json_schema", "schema": schema}}
+        resp = self.client.beta.messages.create(
+            model=self.model,
+            max_tokens=cfg["max_tokens"],
+            system=system,
+            messages=messages,
+            output_config=output,
+            betas=[FALLBACK_BETA],
+            fallbacks="default",
+            timeout=cfg["timeout_s"],
+        )
+        latency = int((time.monotonic() - t0) * 1000)
+        if resp.stop_reason in ("refusal", "max_tokens"):
+            raise ValueError(f"stop_reason {resp.stop_reason}")
+        text = next(b.text for b in resp.content if b.type == "text")
+        data = json.loads(text)
+        if not isinstance(data, dict):
+            raise ValueError("reply is not a JSON object")
+        log.info("Claude decided in %d ms", latency)
+        return cast(JSONObject, data), latency
+
+    def _render(
+        self, case: JSONObject, threads: Threads, env: Envelope, tel: dict[str, Telemetry], secs: float | None
+    ) -> str:
+        assert self.state is not None
+        hist_n = config()["llm"]["history_messages"]
+        out = [
+            f"TIME: {'no wave clock' if secs is None else f'{secs:.0f} s left in the wave'}; "
+            f"case progress {env['progress']:.0%} (0% = opening, 100% = land the deal now).",
+            f"C_open (score 0 line): {_eur(env['c_open'])}. Alternative without a deal: {_eur(env['c_alt'])}.",
+        ]
+        for sid, te in env["threads"].items():
+            proto, t, levers = self.state["protocols"][sid], tel[sid], te["levers"]
+            out += [
+                f"\n=== SUPPLIER {sid} ===",
+                f"PROTOCOL: {proto['segment'].get('label')} - {proto['segment'].get('guidance')}",
+                f"CULTURE ({proto['country'] or 'unknown'}): "
+                f"{proto['culture']['label']} - {proto['culture']['guidance']}",
+                "ENVELOPE: "
+                + f"standing {te['sheet_id']} {json.dumps(te['standing_terms'])} -> C {_eur(te['c_standing'])}"
+                + (
+                    f", incl. est. supplier-health charge {_eur(te['c_true_standing'])}"
+                    if te["penalty_at_offer"]
+                    else ""
+                )
+                + f"; estimated supplier floor price {te['price_floor_est'] or 'unknown'}"
+                + f"; TARGET this round: {json.dumps(te['target_terms'])} -> C {_eur(te['c_target'])}.",
+                "LEVERS (EUR change in our C vs. their standing sheet, same price; negative = saves us): "
+                + "; ".join(f"{lv['field']}={option_label(lv['value'])}: {lv['delta_eur']:+,.0f}" for lv in levers),
+                f"TELEMETRY: status {t['status']}, mindset {t['mindset']}, concession velocity "
+                f"{t['concession_velocity']}% of C_open per round, {t['moves_left']} messages left, "
+                f"claim verdicts so far {json.dumps(t['claims'])}.",
+            ]
+            brief = self.state["briefs"].get(sid)
+            if brief:
+                out.append("EVIDENCE (copy figures exactly):")
+                for item in brief["items"]:
+                    fav = item["favourable"]
+                    if item["kind"] == "should_cost" and te["standing_price"]:
+                        sc = self.pkg.should_cost(brief["part_id"] or "", sid) if self.pkg else None
+                        fav = bool(sc and sc["unit_cost"] and sc["unit_cost"] < te["standing_price"] * 0.97)
+                    if item["refs"] and set(item["refs"]) <= self.cited:
+                        continue
+                    tag = (
+                        "context-only"
+                        if not item["refs"]
+                        else ("favourable" if fav else "NOT favourable - do not cite")
+                    )
+                    out.append(f"- [{tag}] {item['sentence']}")
+            out.append(f"THREAD (last {hist_n} messages):")
+            for m in threads[sid][-hist_n:]:
+                head = {k: m.get(k) for k in ("status", "term_sheets", "claim_results", "missing_fields") if m.get(k)}
+                out.append(f"--- {m.get('from')}: {json.dumps(head)}\n{str(m.get('body') or '')[:900]}")
+                for att in m.get("attachments") or []:  # type: ignore[union-attr]
+                    if isinstance(att, dict):
+                        out.append(f"[attachment {att.get('name')}]\n{str(att.get('text') or '')[:1200]}")
+        out.append(f"\nALREADY CITED (never cite again): {sorted(self.cited) or 'none'}")
+        out.append("Decide the next move now.")
+        return "\n".join(out)
+
+    # -- Python gates --------------------------------------------------------------------------
+
+    def _validate(
+        self,
+        case: JSONObject,
+        threads: Threads,
+        env: Envelope,
+        tel: dict[str, Telemetry],
+        raw: JSONObject,
+        latency: int,
+    ) -> JSONObject | None:
+        assert self.state is not None
+        audit, dec = raw.get("reasoning_audit"), raw.get("decision")
+        if not isinstance(audit, dict) or not isinstance(dec, dict):
+            return None
+        sid, action = str(dec.get("supplier_id")), str(dec.get("action"))
+        te = env["threads"].get(sid)
+        if te is None:
+            return None
+        sheets: list[JSONObject] = []
+        for s in dec.get("term_sheets") or []:  # type: ignore[union-attr]
+            if isinstance(s, dict):
+                labels = self.state["labels"]
+                sheets.append({k: (labels[k].get(str(v), v) if k in labels else v) for k, v in s.items()})
+        kit_d = {
+            "supplier_id": sid,
+            "action": action,
+            "subject": dec.get("subject"),
+            "body": dec.get("outbound_email_text"),
+            "term_sheets": sheets,
+        }
+        guarded = super().guard(case, threads, kit_d)  # type: ignore[no-untyped-call]
+        if not isinstance(guarded, dict):
+            return None
+        d = cast(JSONObject, guarded)
+        observed, intent = str(audit.get("observed_barrier") or ""), str(audit.get("strategic_intent") or "")
+        t = tel[sid]
+
+        if action == "accept":
+            c, target = te["c_true_standing"], te["c_target"]
+            late = (
+                t["mindset"] in ("stalled", "critical_breakoff")
+                or t["status"] == "agreed"
+                or t["moves_left"] <= 1
+                or env["progress"] >= 0.85
+            )
+            if c is None or (target is not None and c > target * 1.002 and not late):
+                log.info("accept vetoed: C %s above target %s and the case is not late", c, target)
+                return None  # deterministic counter instead
+        elif action == "walk_away":
+            alt = env["c_alt"]
+            offers = [x["c_true_standing"] for x in env["threads"].values() if x["c_true_standing"] is not None]
+            if alt is None or any(c < alt for c in offers):
+                log.info("walk_away vetoed: an offer beats the alternative")
+                return None
+        else:
+            msg = d.get("message")
+            if not isinstance(msg, dict):
+                return None
+            kept = []
+            for s in msg.get("term_sheets") or []:  # type: ignore[union-attr]
+                terms = s.get("terms") if isinstance(s, dict) else None
+                if not isinstance(terms, dict):
+                    continue
+                c = safe_cost(case, terms, te["standard"], te["supplier_estimate"])
+                if te["c_true_standing"] is None or c < te["c_true_standing"]:
+                    kept.append(s)
+            if not kept and te["target_terms"]:
+                kept = [{"terms": te["target_terms"]}]
+            msg["term_sheets"] = self._equivalent(case, te, kept)[:3]
+        return self._with_audit(case, d, env, tel, "claude", observed, intent, latency)
+
+    def _equivalent(self, case: JSONObject, te: ThreadEnvelope, sheets: list[JSONValue]) -> list[JSONValue]:
+        """Multiple sheets must be equivalent for us (MESO): a supplier will pick the one it likes
+        best, so a dearer 'option B' is a concession in disguise. Keep those within the tolerance
+        of the cheapest one."""
+        priced = []
+        for s in sheets:
+            terms = s.get("terms") if isinstance(s, dict) else None
+            if isinstance(terms, dict):
+                priced.append((safe_cost(case, terms, te["standard"], te["supplier_estimate"]), s))
+        if not priced:
+            return sheets
+        cheapest = min(c for c, _ in priced)
+        tol = config()["llm"]["equivalent_sheet_pct"] / 100
+        kept = [s for c, s in priced if c <= cheapest * (1 + tol)]
+        if len(kept) < len(priced):
+            log.info("dropped %d non-equivalent sheet(s)", len(priced) - len(kept))
+        return kept
+
+    def _fallback(self, case: JSONObject, threads: Threads, env: Envelope, tel: dict[str, Telemetry]) -> JSONObject:
+        """No Claude (timeout, outage, vetoed move): counter at the engine's target sheet."""
+        sid = env["best_supplier"] or next(iter(env["threads"]), None)
+        if sid is None:
+            return closing_move(case, threads)
+        te, t = env["threads"][sid], tel[sid]
+        if te["target_terms"] is None or t["moves_left"] <= 1 or t["mindset"] == "critical_breakoff":
+            d = closing_move(case, threads)
+            return self._with_audit(case, d, env, tel, "fallback", "Last chance to close.", "Close on the best sheet.")
+        terms = complete_offer(case, te["target_terms"])
+        price = _num(terms.get("unit_price"))
+        body = (
+            "Dear Sir or Madam,\n\nthank you for your offer. To move forward we propose the attached terms"
+            + (f", at a unit price of EUR {price:,.2f}" if price is not None else "")
+            + ". We would appreciate your confirmation.\n\nKind regards,\n"
+            + SIGNATURE
+        )
+        title = case.get("title")
+        d = {
+            "supplier_id": sid,
+            "message": {"subject": f"Re: {title}", "body": body, "term_sheets": [{"terms": terms}]},
+        }
+        return self._with_audit(
+            case, d, env, tel, "fallback", "No model answer this turn.", "Counter at the engine's target sheet."
+        )
+
+    # -- audit ---------------------------------------------------------------------------------
+
+    def _with_audit(
+        self,
+        case: JSONObject,
+        d: JSONObject,
+        env: Envelope,
+        tel: dict[str, Telemetry],
+        source: DecisionSource,
+        observed: str,
+        intent: str,
+        latency: int | None = None,
+    ) -> JSONObject:
+        assert self.state is not None
+        sid = str(d.get("supplier_id"))
+        msg = d.get("message")
+        if not isinstance(msg, dict) or sid not in env["threads"]:
+            return d
+        te, t, proto = env["threads"][sid], tel[sid], self.state["protocols"][sid]
+        msg["reasoning_audit"] = {
+            "observed_barrier": observed or "-",
+            "strategic_intent": intent or "-",
+            "mathematical_justification": self._maths(case, te, t, env, msg),
+            "decision_source": source,
+            "concession_velocity": t["concession_velocity"],
+            "supplier_mindset": t["mindset"],
+            "c_target": te["c_target"],
+            "c_floor_est": te["c_floor_est"],
+            "penalty_at_offer": te["penalty_at_offer"],
+            "claims": cast(JSONValue, t["claims"]),
+            "llm_latency_ms": latency,
+            "seconds_left": self._seconds_left(),
+            "c_open": env["c_open"],
+            "c_alt": env["c_alt"],
+            "segment_protocol": proto["segment"].get("label"),
+            "culture_protocol": proto["culture"]["label"],
+        }
+        return d
+
+    def _maths(self, case: JSONObject, te: ThreadEnvelope, t: Telemetry, env: Envelope, msg: Message) -> str:
+        """The audit's numbers, all from the engine."""
+        sheets = msg.get("term_sheets")
+        first = sheets[0] if isinstance(sheets, list) and sheets else None
+        ours = first.get("terms") if isinstance(first, dict) else None
+        c_ours = safe_cost(case, ours, te["standard"], te["supplier_estimate"]) if isinstance(ours, dict) else None
+        best = min(te["levers"], key=lambda lv: lv["delta_eur"], default=None)
+        parts = [
+            f"C_open {_eur(env['c_open'])}",
+            f"supplier standing {_eur(te['c_standing'])}"
+            + (f" (+{_eur(te['penalty_at_offer'])} est. supplier-health charge)" if te["penalty_at_offer"] else ""),
+            f"our proposal {_eur(c_ours)}" if c_ours is not None else "no counter-sheet",
+            f"target {_eur(te['c_target'])}",
+            f"floor estimate {_eur(te['c_floor_est'])}",
+            f"alternative {_eur(env['c_alt'])}",
+        ]
+        if best and best["delta_eur"] < 0:
+            parts.append(f"best lever {best['field']}={option_label(best['value'])} saves {_eur(-best['delta_eur'])}")
+        if t["concession_velocity"] is not None:
+            parts.append(f"concession velocity {t['concession_velocity']}%/round ({t['mindset']})")
+        return " | ".join(parts) + "."
+
+    def _remember_citations(self, d: JSONObject) -> None:
+        msg = d.get("message")
+        body = msg.get("body") if isinstance(msg, dict) else None
+        if isinstance(body, str):
+            self.cited |= set(ID_RE.findall(body))
+
+
+def new_agent_factory(pkg: Package | None) -> Callable[[Callable[[], float | None] | None], HollerauAgent]:
+    """One Anthropic client shared by all cases; one agent per case, each with its wave deadline."""
+    client = anthropic.Anthropic(max_retries=1)
+    return lambda deadline: HollerauAgent(client, pkg, deadline=deadline)

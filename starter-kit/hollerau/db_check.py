@@ -51,6 +51,10 @@ def check_service_role(db: SupabaseDB, session_id: str, supplier_id: str) -> Non
         "strategic_intent": "selftest",
         "mathematical_justification": "selftest",
         "message_body": "selftest",
+        "c_target": 105000.0,
+        "c_floor_est": 101000.0,
+        "decision_source": "naive",
+        "claims": {"verified": 1, "irrelevant": 0, "contradicted": 0, "duplicate": 0},
     }
     row = db.insert_audit(audit)
     ok(f"insert audit row (id={row.get('id')})")
@@ -79,6 +83,9 @@ def check_service_role(db: SupabaseDB, session_id: str, supplier_id: str) -> Non
     if o.get("moves") != 1 or o.get("last_seconds_left") != 420 or o.get("supplier_ids") != [supplier_id]:
         raise DBError(f"case_overview live state wrong: {o!r}")
     ok("case_overview shows the latest move (moves=1, last_seconds_left=420)")
+    if o.get("last_c_target") != 105000.0 or o.get("last_decision_source") != "naive":
+        raise DBError(f"telemetry columns missing - run db/migrations/003_agent_telemetry.sql: {o!r}")
+    ok("migration 003 telemetry columns present (c_target, decision_source, claims)")
 
 
 def check_anon(url: str, anon_key: str, session_id: str) -> None:

@@ -6,6 +6,7 @@ Every row is checked against its TypedDict's columns before it is returned, so a
 
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import cast
 
@@ -57,10 +58,16 @@ class Package:
             self.data = DataPackage(path)  # type: ignore[no-untyped-call]  # upstream is unannotated
         except FileNotFoundError as e:
             raise PackageError(f"no data package at {path} - run `uv run arena data`") from e
+        # Parallel cases share one SQLite connection: serialise access, and build the kit's lazy
+        # ID index now - built concurrently by several threads it breaks (seen in the rehearsal).
+        self.lock = threading.RLock()
+        with self.lock:
+            self.data.lookup("")  # type: ignore[no-untyped-call]
 
     def _query(self, sql: str, params: tuple[SQLValue, ...] = ()) -> list[SQLRow]:
         try:
-            rows = self.data.query(sql, params, limit=ALL_ROWS)  # type: ignore[no-untyped-call]
+            with self.lock:
+                rows = self.data.query(sql, params, limit=ALL_ROWS)  # type: ignore[no-untyped-call]
         except Exception as e:  # sqlite3 errors, read-only guard
             log.error("package query failed: %s", e)
             raise PackageError(f"{type(e).__name__}: {e}") from e
@@ -109,7 +116,8 @@ class Package:
         if not rows:
             raise PackageError(f"unknown document {doc_id}")
         try:
-            text = str(self.data.document(doc_id))  # type: ignore[no-untyped-call]
+            with self.lock:
+                text = str(self.data.document(doc_id))  # type: ignore[no-untyped-call]
         except FileNotFoundError as e:
             raise PackageError(f"document file for {doc_id} missing") from e
         return _as(TriggerDocument, {**rows[0], "text": text})
@@ -140,4 +148,5 @@ class Package:
 
     def is_citable(self, ref: str) -> bool:
         """True if the arena knows this ID (facts.json or a table row) - unknown IDs cost trust."""
-        return self.data.lookup(ref) is not None  # type: ignore[no-untyped-call]
+        with self.lock:
+            return self.data.lookup(ref) is not None  # type: ignore[no-untyped-call]

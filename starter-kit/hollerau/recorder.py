@@ -6,22 +6,35 @@ move's audit row to Supabase FIRST; if that write fails, the move is not sent (D
 and play() stops). Costs come from arena_kit.cost.total_cost via hollerau.kit, never from the LLM.
 
 An agent may attach its reasoning to a message as message["reasoning_audit"] =
-{"observed_barrier", "strategic_intent", "mathematical_justification"}; it is logged and stripped
-before the message goes to the arena. Without it (e.g. the naive agent) a labelled, deterministic
-baseline text is logged instead.
+{"observed_barrier", "strategic_intent", "mathematical_justification", plus optional telemetry:
+"decision_source", "concession_velocity", "supplier_mindset", "c_target", "c_floor_est",
+"penalty_at_offer", "claims", "llm_latency_ms", "seconds_left", "c_open", "c_alt",
+"segment_protocol", "culture_protocol"}; it is logged and stripped before the message goes to the
+arena. Without it (the naive agent, the kit's time-cap close) a labelled, deterministic text is
+logged instead.
 """
 
 import logging
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import cast
+from typing import cast, get_args
 
 from arena_kit.client import ArenaClient
 from arena_kit.play import RemoteTable
 
 from .db import DBError, SupabaseDB
 from .kit import JSONObject, JSONValue, Message, Threads, standard_terms, standing, total_cost
-from .types import AuditLogRow, CaseStatus, CaseUpdate, Environment, MoveAction, Terms
+from .types import (
+    AuditLogRow,
+    CaseStatus,
+    CaseUpdate,
+    ClaimTally,
+    DecisionSource,
+    Environment,
+    MoveAction,
+    Terms,
+)
 
 log = logging.getLogger("hollerau.recorder")
 
@@ -50,13 +63,32 @@ def _eur(v: float | None) -> str:
 
 
 class RecordingTable(RemoteTable):  # upstream RemoteTable is unannotated: super() calls are marked
-    def __init__(self, client: ArenaClient, db: SupabaseDB, environment: Environment, wave: int | None = None) -> None:
-        super().__init__(client)  # type: ignore[no-untyped-call]
-        self.db, self.environment, self.wave = db, environment, wave
+    def __init__(
+        self,
+        client: ArenaClient,
+        db: SupabaseDB,
+        environment: Environment,
+        wave: int | None = None,
+        case: JSONObject | None = None,
+        deadline: Callable[[], float | None] | None = None,
+        unreasoned: tuple[str, DecisionSource] = (NAIVE, "naive"),
+    ) -> None:
+        """`case`: the final's case listing (lets RemoteTable resume a started session).
+        `deadline`: the wave cap as time.time() (final only) - recorded as seconds_left.
+        `unreasoned`: label and source for moves that carry no reasoning (naive agent, or the
+        kit's own closing_move at the wave cap when a reasoning agent plays)."""
+        super().__init__(client, case)  # type: ignore[no-untyped-call]
+        self.db, self.environment, self.wave, self.deadline = db, environment, wave, deadline
+        self.unreasoned_label, self.unreasoned_source = unreasoned
         self.run_tag = time.strftime("%Y%m%dT%H%M%S")
         self.threads: Threads = {}
         self.case_data: JSONObject = {}
         self.db_session_id = ""
+        self.case_meta_written = False
+
+    def seconds_left(self) -> int | None:
+        cap = self.deadline() if self.deadline else None
+        return max(0, int(cap - time.time())) if cap else None
 
     # -- session -------------------------------------------------------------------------------
 
@@ -116,6 +148,21 @@ class RecordingTable(RemoteTable):  # upstream RemoteTable is unannotated: super
 
     # -- audit ---------------------------------------------------------------------------------
 
+    def _write_case_meta(self, r: JSONObject) -> None:
+        """Once per case, from the agent's first reasoned move: protocols and the live envelope's
+        c_open / c_alt (the final result overwrites them with the arena's figures)."""
+        changes: CaseUpdate = {
+            "c_open": _num(r.get("c_open")),
+            "c_alt": _num(r.get("c_alt")),
+            "segment_protocol": _str(r.get("segment_protocol")),
+            "culture_protocol": _str(r.get("culture_protocol")),
+        }
+        try:
+            self.db.update_case(self.db_session_id, changes)
+            self.case_meta_written = True
+        except DBError as e:  # display data only: the move's own audit row is what must not fail
+            log.warning("case meta not written: %s", e)
+
     def _cost(self, terms: JSONObject, standard: JSONObject) -> float | None:
         if _num(terms.get("unit_price")) is None:
             return None
@@ -141,25 +188,41 @@ class RecordingTable(RemoteTable):  # upstream RemoteTable is unannotated: super
 
         reasoning = message.get(REASONING_KEY)
         r = reasoning if isinstance(reasoning, dict) else {}
+        source = _str(r.get("decision_source"))
+        claims = r.get("claims")
+        secs = _num(r.get("seconds_left"))
+        latency = _num(r.get("llm_latency_ms"))
         row: AuditLogRow = {
             "session_id": self.db_session_id,
             "supplier_id": supplier_id,
             "turn_number": sum(m.get("from") == "buyer" for m in events) + 1,
             "action": action,
-            "seconds_left": None,
+            "seconds_left": int(secs) if secs is not None else self.seconds_left(),
             "supplier_terms": to_terms(theirs),
             "proposed_terms": to_terms(ours) if action != "walk_away" else None,
             "c_supplier_offer": c_theirs,
             "c_proposed": c_ours if action != "walk_away" else None,
+            "concession_velocity": _num(r.get("concession_velocity")),
+            "supplier_mindset": _str(r.get("supplier_mindset")),
             "observed_barrier": _str(r.get("observed_barrier"))
             or (f"Supplier's standing offer costs {_eur(c_theirs)}." if c_theirs else "No standing term sheet."),
             "strategic_intent": _str(r.get("strategic_intent"))
-            or f"{NAIVE}: {'counter-offer' if action == 'send' else action.replace('_', ' ')}.",
+            or f"{self.unreasoned_label}: {'counter-offer' if action == 'send' else action.replace('_', ' ')}.",
             "mathematical_justification": _str(r.get("mathematical_justification"))
             or f"total_cost: supplier offer {_eur(c_theirs)}, our proposal {_eur(c_ours)}.",
             "message_subject": _str(message.get("subject")),
             "message_body": _str(message.get("body")),
+            "c_target": _num(r.get("c_target")),
+            "c_floor_est": _num(r.get("c_floor_est")),
+            "penalty_at_offer": _num(r.get("penalty_at_offer")),
+            "claims": cast(ClaimTally, claims) if isinstance(claims, dict) else None,
+            "decision_source": cast(DecisionSource, source)
+            if source in get_args(DecisionSource)
+            else (None if r else self.unreasoned_source),
+            "llm_latency_ms": int(latency) if latency is not None else None,
         }
+        if not self.case_meta_written and r:
+            self._write_case_meta(r)
         try:
             self.db.insert_audit(row)
         except DBError as e:
