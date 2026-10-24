@@ -47,6 +47,7 @@
   --color-ring: var(--ring);
   --color-success: var(--success);
   --color-warning: var(--warning);
+  --color-info: var(--info);
   --font-sans: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
   --color-ring-offset-background: var(--background);
@@ -85,6 +86,7 @@
   --destructive-foreground: oklch(0.97 0 0);
   --success: oklch(0.75 0.16 150);
   --warning: oklch(0.82 0.16 85);
+  --info: oklch(0.74 0.12 240);
   --border: oklch(0.3 0.008 260);
   --input: oklch(0.3 0.008 260);
   --ring: oklch(0.72 0.18 50);
@@ -125,3 +127,7 @@
 
 @keyframes live-pulse { 0%,100% { box-shadow: 0 0 0 0 color-mix(in oklch, var(--primary) 45%, transparent); } 50% { box-shadow: 0 0 0 4px color-mix(in oklch, var(--primary) 0%, transparent); } }
 @utility live { animation: live-pulse 2s ease-in-out infinite; border-color: var(--primary); }
+
+@media (prefers-reduced-motion: reduce) {
+  .live { animation: none; }
+}
