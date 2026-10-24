@@ -1,6 +1,6 @@
 # Hollerau Agentic Command — Dashboard Plan
 
-Note: I can't write to your desktop folder "42Planets_tacto". Everything is built in this Lovable project; connect GitHub (Settings → GitHub) and pull it into that folder.
+Note on GitHub: Lovable can't attach to an existing repo like "42Planets_tacto", and I can't connect GitHub for you. Instead, in Project settings → Git, click Connect — Lovable creates a new repo that stays in sync. Then on your desktop, clone it inside 42Planets_tacto (e.g. a `dashboard/` folder) next to your Python runner. The runner and dashboard only talk through the database, so they don't need to share a repo.
 
 ## What we build
 A dark, industrial "command center" dashboard with four views, driven by the session data shape you provided (session, supplier, metrics, audit_trail).
