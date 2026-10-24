@@ -118,6 +118,58 @@ class TriggerDocument(TypedDict):
     text: str
 
 
+class ShouldCost(TypedDict):
+    id: str  # 'cost:<part>' - citable
+    part_id: str
+    estimate_date: str | None
+    cost_base: str | None  # country of the cost base, e.g. 'DE'
+    supplier_id: str | None  # set when the estimate models this supplier's own plant
+    unit_cost: float | None
+    price_unit: int | None
+    material_eur: float | None
+    conversion_eur: float | None
+    overhead_eur: float | None
+    confidence_pct: int | None
+    method: str | None
+
+
+class CostDriver(TypedDict):
+    part_id: str
+    series_id: str
+    weight: float | None
+    source: str | None
+
+
+class IndexValue(TypedDict):
+    id: str  # 'idx:<series>@<YYYY-MM>' - citable
+    series_id: str
+    month: str
+    value: float | None
+
+
+class IndexSeries(TypedDict):
+    id: str
+    name: str | None
+    unit: str | None
+    source: str | None
+    frequency: str | None
+    licence: str | None
+    url: str | None
+    first_month: str | None
+    last_month: str | None
+    formula: str | None
+
+
+class NewsItem(TypedDict):
+    id: str
+    date: str | None
+    supplier_id: str | None
+    topic: str | None
+    headline: str | None
+    body: str | None
+    source: str | None
+
+
 class SupplierBundle(TypedDict):
     """Everything the package says about one supplier and the part under negotiation."""
 

@@ -12,11 +12,16 @@ from typing import cast
 from arena_kit.data import DataPackage
 
 from .package_types import (
+    CostDriver,
+    IndexSeries,
+    IndexValue,
     NegotiationEvent,
+    NewsItem,
     PackageSupplier,
     Part,
     PriceCondition,
     Scorecard,
+    ShouldCost,
     SupplierBundle,
     SupplierIntel,
     TriggerDocument,
@@ -108,3 +113,31 @@ class Package:
         except FileNotFoundError as e:
             raise PackageError(f"document file for {doc_id} missing") from e
         return _as(TriggerDocument, {**rows[0], "text": text})
+
+    def should_cost(self, part_id: str, supplier_id: str | None) -> ShouldCost | None:
+        """The category team's full-cost estimate: this supplier's own plant if modelled, else the
+        generic (German cost base) row for the part."""
+        rows = [_as(ShouldCost, r) for r in self._query("SELECT * FROM should_cost WHERE part_id = ?", (part_id,))]
+        own = [r for r in rows if supplier_id and r["supplier_id"] == supplier_id]
+        generic = [r for r in rows if r["supplier_id"] is None]
+        found = own or generic
+        return found[0] if found else None
+
+    def cost_drivers(self, part_id: str) -> list[CostDriver]:
+        rows = self._query("SELECT * FROM cost_drivers WHERE part_id = ? ORDER BY weight DESC", (part_id,))
+        return [_as(CostDriver, r) for r in rows]
+
+    def index_series(self, series_id: str) -> IndexSeries | None:
+        return self._one(IndexSeries, "SELECT * FROM index_series WHERE id = ?", (series_id,))
+
+    def index_values(self, series_id: str) -> list[IndexValue]:
+        rows = self._query("SELECT * FROM index_values WHERE series_id = ? ORDER BY month", (series_id,))
+        return [_as(IndexValue, r) for r in rows]
+
+    def news(self, supplier_id: str) -> list[NewsItem]:
+        rows = self._query("SELECT * FROM news WHERE supplier_id = ? ORDER BY date DESC", (supplier_id,))
+        return [_as(NewsItem, r) for r in rows]
+
+    def is_citable(self, ref: str) -> bool:
+        """True if the arena knows this ID (facts.json or a table row) - unknown IDs cost trust."""
+        return self.data.lookup(ref) is not None  # type: ignore[no-untyped-call]

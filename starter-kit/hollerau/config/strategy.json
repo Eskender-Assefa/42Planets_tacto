@@ -1,0 +1,63 @@
+{
+  "_comment": "Tuning and protocol text for the Hollerau agent. Configuration, not data: rates and wording only. Country cost factors are the rule of thumb in data/package/company.md (Should-cost).",
+  "segments": {
+    "leverage": {
+      "label": "Leverage - Aggressive Protocol",
+      "relationship": false,
+      "anchor_below_floor_pct": 2.0,
+      "anchor_below_offer_pct": 10.0,
+      "landing_above_floor_pct": 1.0,
+      "landing_below_offer_pct": 2.0,
+      "min_margin_pct": 3.0,
+      "guidance": "Power sits with us: alternatives exist. Anchor low, concede in small steps, trade payment days and volume for price. A credible readiness to switch is allowed; never invent an alternative."
+    },
+    "stabilise": {
+      "label": "Strategic - Safeguard Protocol",
+      "relationship": true,
+      "anchor_below_target_pct": 1.5,
+      "guidance": "Long-term partner. Do not squeeze below its sustainable margin: that costs us. Lead with risk-sharing (index clause, payment days, horizon) and cost transparency; keep the tone collaborative."
+    },
+    "secure_supply": {
+      "label": "Bottleneck - Protection Protocol",
+      "relationship": true,
+      "anchor_below_target_pct": 1.0,
+      "guidance": "Supply security first: few or no alternatives. Secure volume, lead time and horizon; pay a fair price, keep the supplier healthy, never threaten to walk."
+    },
+    "quality_first": {
+      "label": "Quality Escalation Protocol",
+      "relationship": false,
+      "anchor_below_floor_pct": 0.0,
+      "anchor_below_offer_pct": 4.0,
+      "landing_above_floor_pct": 2.0,
+      "landing_below_offer_pct": 1.0,
+      "min_margin_pct": 4.0,
+      "guidance": "The problem is quality and delivery. Get binding ppm commitments and chargebacks per complaint, cite the scorecard and quality notifications; price comes second."
+    },
+    "routine": {
+      "label": "Routine - Efficiency Protocol",
+      "relationship": false,
+      "anchor_below_floor_pct": 1.0,
+      "anchor_below_offer_pct": 6.0,
+      "landing_above_floor_pct": 1.0,
+      "landing_below_offer_pct": 1.5,
+      "min_margin_pct": 3.0,
+      "guidance": "Low-touch spend: fewer suppliers, longer frameworks, bundles. Trade contract length and payment days for price; keep it short."
+    }
+  },
+  "cultures": {
+    "DE": {"label": "Low-Context / Direct Specification", "guidance": "Formal, concise, data first. No small talk; state the trade-off and the numbers plainly."},
+    "AT": {"label": "Low-Context / Formal-Courteous", "guidance": "Formal and precise with a courteous opening line; data-driven."},
+    "CH": {"label": "Low-Context / Precision", "guidance": "Precise, reliable, understated; emphasise quality, punctuality and long-term reliability."},
+    "CZ": {"label": "Mid-Context / Pragmatic", "guidance": "Polite and pragmatic; acknowledge the relationship, then concrete figures. Avoid hard ultimatums."},
+    "PL": {"label": "Mid-Context / Relationship-Aware", "guidance": "Respectful and personal; recognise past cooperation before the ask; firm but not confrontational."},
+    "HU": {"label": "Mid-Context / Relationship-Aware", "guidance": "Courteous, relationship-aware; frame the ask as a joint solution."},
+    "TR": {"label": "High-Context / Relationship-Preserving", "guidance": "Warm and respectful; build goodwill, frame concessions as mutual wins, never cause loss of face."},
+    "CN": {"label": "High-Context / Harmony-Preserving", "guidance": "Very polite and patient; long-term partnership framing; avoid direct rejection - offer alternatives instead."},
+    "_default": {"label": "Neutral / Professional", "guidance": "Clear, polite, professional English."}
+  },
+  "country_cost_factor": {"DE": 1.0, "AT": 1.05, "CH": 1.05, "CZ": 0.825, "PL": 0.825, "HU": 0.825, "TR": 0.75, "CN": 0.7},
+  "full_cost_estimate": {"use_lower_bound": true},
+  "relationship_price_search": {"low_pct_of_offer": 85.0, "steps": 300},
+  "telemetry": {"stalled_velocity_pct": 0.1, "yielding_velocity_pct": 0.5},
+  "llm": {"timeout_s": 35.0, "max_tokens": 4000, "history_messages": 6}
+}
