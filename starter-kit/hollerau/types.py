@@ -37,6 +37,7 @@ class CaseRow(TypedDict):
     title: NotRequired[str | None]
     case_type: NotRequired[str | None]
     category_goal: NotRequired[str | None]
+    supplier_ids: NotRequired[list[str]]
     status: NotRequired[CaseStatus]
     deal_supplier_id: NotRequired[str | None]
     c_open: NotRequired[float | None]

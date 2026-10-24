@@ -30,7 +30,8 @@ def check_service_role(db: SupabaseDB, session_id: str, supplier_id: str) -> Non
     ok("upsert supplier")
 
     case: CaseRow = {"session_id": session_id, "case_id": "case:SELFTEST", "environment": "sim",
-                     "title": "db_check", "category_goal": "leverage", "c_open": 1000.0}  # fmt: skip
+                     "title": "db_check", "category_goal": "leverage", "c_open": 1000.0,
+                     "supplier_ids": [supplier_id]}  # fmt: skip
     written = db.upsert_case(case)
     if written.get("status") != "active":
         raise DBError(f"case default status not applied: {written.get('status')!r}")
@@ -70,6 +71,14 @@ def check_service_role(db: SupabaseDB, session_id: str, supplier_id: str) -> Non
 
     scores = db.select("wave_scores", environment="eq.sim")
     ok(f"wave_scores view readable ({len(scores)} row(s))")
+
+    overview = db.select("case_overview", session_id=f"eq.{session_id}")
+    if len(overview) != 1:
+        raise DBError(f"case_overview returned {len(overview)} rows - run db/migrations/002_case_overview.sql")
+    o = overview[0]
+    if o.get("moves") != 1 or o.get("last_seconds_left") != 420 or o.get("supplier_ids") != [supplier_id]:
+        raise DBError(f"case_overview live state wrong: {o!r}")
+    ok("case_overview shows the latest move (moves=1, last_seconds_left=420)")
 
 
 def check_anon(url: str, anon_key: str, session_id: str) -> None:

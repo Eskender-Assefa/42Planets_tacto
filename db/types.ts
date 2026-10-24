@@ -38,6 +38,7 @@ export interface Case {
   title: string | null;
   case_type: string | null;
   category_goal: string | null;
+  supplier_ids: string[];
   status: CaseStatus;
   deal_supplier_id: string | null;
   c_open: number | null;
@@ -68,6 +69,20 @@ export interface AuditLog {
   mathematical_justification: string;
   message_subject: string | null;
   message_body: string | null;
+}
+
+/** One row per case with the newest audit row's live state (view `case_overview`). */
+export interface CaseOverview extends Case {
+  moves: number;
+  last_turn: number | null;
+  last_move_at: string | null;
+  last_supplier_id: string | null;
+  last_action: MoveAction | null;
+  last_seconds_left: number | null;
+  last_mindset: string | null;
+  last_concession_velocity: number | null;
+  last_c_supplier_offer: number | null;
+  last_c_proposed: number | null;
 }
 
 export interface WaveScore {
