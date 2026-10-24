@@ -8,6 +8,25 @@ export type CaseStatus = "active" | "deal" | "walked_away" | "no_deal" | "error"
 
 export type MoveAction = "send" | "accept" | "walk_away";
 
+/** Who made a move: Claude, a deterministic fallback, a Python rule, the time-cap close, the naive agent. */
+export type DecisionSource = "claude" | "fallback" | "rule" | "closing" | "naive";
+
+/** The arena's verdicts on the data IDs we cited (only the first 3 per message are checked). */
+export interface ClaimTally {
+  verified: number;
+  irrelevant: number;
+  contradicted: number;
+  duplicate: number;
+}
+
+/** An index-linked price clause (option values from the case's term_options). */
+export interface IndexClause {
+  series: string;
+  material_share: number;
+  deadband_pct: number;
+  base_month: string;
+}
+
 /** A term sheet as the arena sends it; every field is optional because sheets can be partial. */
 export interface Terms {
   unit_price?: number | null;
@@ -16,9 +35,11 @@ export interface Terms {
   payment_days?: number | null;
   lead_time_days?: number | null;
   incoterm?: string | null;
-  index_clause?: string | null;
+  index_clause?: IndexClause | null;
   tooling_eur?: number | null;
   effective_date?: string | null;
+  ppm_commitment?: number | null;
+  chargeback_eur_per_complaint?: number | null;
 }
 
 export interface Supplier {
@@ -48,6 +69,8 @@ export interface Case {
   score: number | null;
   started_at: string;
   ended_at: string | null;
+  segment_protocol: string | null;
+  culture_protocol: string | null;
 }
 
 export interface AuditLog {
@@ -69,6 +92,12 @@ export interface AuditLog {
   mathematical_justification: string;
   message_subject: string | null;
   message_body: string | null;
+  c_target: number | null;
+  c_floor_est: number | null;
+  penalty_at_offer: number | null;
+  claims: ClaimTally | null;
+  decision_source: DecisionSource | null;
+  llm_latency_ms: number | null;
 }
 
 /** One row per case with the newest audit row's live state (view `case_overview`). */
@@ -83,6 +112,9 @@ export interface CaseOverview extends Case {
   last_concession_velocity: number | null;
   last_c_supplier_offer: number | null;
   last_c_proposed: number | null;
+  last_c_target: number | null;
+  last_c_floor_est: number | null;
+  last_decision_source: DecisionSource | null;
 }
 
 export interface WaveScore {
