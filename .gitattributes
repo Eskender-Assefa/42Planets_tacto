@@ -1,0 +1,2 @@
+# The Lovable dashboard is formatted by Prettier with LF endings; keep LF on Windows checkouts.
+dashboard/** text=auto eol=lf
