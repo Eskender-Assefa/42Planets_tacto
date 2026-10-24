@@ -1,43 +1,7 @@
 import { useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
-
-export type CaseRow = {
-  session_id: string;
-  wave_number: number;
-  turn_number: number;
-  seconds_left: number;
-  status: string;
-  c_open: number;
-  c_current_offer: number;
-  c_best_floor: number;
-  current_score: number;
-  final_score: number | null;
-  supplier: { id: string; name: string; segment: string; country: string } | null;
-  mindset?: string | null;
-};
-
-export type AuditRow = {
-  id: number;
-  session_id: string | null;
-  turn_number: number;
-  created_at: string;
-  supplier_price_offered: number | null;
-  calculated_local_cost: number | null;
-  concession_velocity: number | null;
-  supplier_mindset: string | null;
-  observed_barrier: string;
-  strategic_intent: string;
-  mathematical_justification: string;
-  raw_email_sent: string;
-};
-
-/** Score = share of the way from opening cost to best floor (0..1). */
-export function envelopeScore(open: number, current: number, floor: number) {
-  const span = open - floor;
-  if (span <= 0) return 0;
-  return Math.max(0, Math.min(1, (open - current) / span));
-}
+import { hollerau } from "@/integrations/hollerau/client";
+import type { AuditLog, CaseOverview, Environment, Supplier, WaveScore } from "@/integrations/hollerau/types";
 
 export const eur = (n: number | null | undefined) =>
   n == null
@@ -47,70 +11,131 @@ export const eur = (n: number | null | undefined) =>
 export const clock = (s: number) =>
   `${String(Math.floor(Math.max(0, s) / 60)).padStart(2, "0")}:${String(Math.max(0, s) % 60).padStart(2, "0")}`;
 
-function useRealtime(table: string, keys: string[][]) {
-  const qc = useQueryClient();
-  useEffect(() => {
-    const ch = supabase
-      .channel(`${table}-${Math.random().toString(36).slice(2)}`)
-      .on("postgres_changes", { event: "*", schema: "public", table }, () => {
-        keys.forEach((k) => qc.invalidateQueries({ queryKey: k }));
-      })
-      .subscribe();
-    return () => {
-      supabase.removeChannel(ch);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [table]);
+/** Score is owned by the backend cost engine; show it exactly as stored. */
+export const scoreLabel = (s: number | null | undefined) => (s == null ? "pending" : s.toFixed(3));
+
+/** Seconds remaining, ticking down locally from the last move's snapshot. */
+export function secondsRemaining(c: CaseOverview, now = Date.now()): number | null {
+  if (c.status !== "active" || c.last_seconds_left == null || c.last_move_at == null) return null;
+  const elapsed = (now - new Date(c.last_move_at).getTime()) / 1000;
+  return Math.max(0, c.last_seconds_left - elapsed);
 }
 
-export function useCases() {
-  useRealtime("cases", [["cases"]]);
-  useRealtime("audit_logs", [["cases"]]);
+function useRealtime(tables: string[], keys: string[][]) {
+  const qc = useQueryClient();
+  useEffect(() => {
+    const ch = tables.reduce(
+      (channel, table) =>
+        channel.on("postgres_changes", { event: "*", schema: "public", table }, () => {
+          keys.forEach((k) => qc.invalidateQueries({ queryKey: k }));
+        }),
+      hollerau.channel(`hollerau-${Math.random().toString(36).slice(2)}`),
+    );
+    ch.subscribe();
+    return () => {
+      hollerau.removeChannel(ch);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+}
+
+/** Most recent environment that has any cases; used as the default filter. */
+function useLatestEnvironment() {
   return useQuery({
-    queryKey: ["cases"],
-    queryFn: async (): Promise<CaseRow[]> => {
-      const [{ data, error }, { data: logs }] = await Promise.all([
-        supabase
-          .from("cases")
-          .select("*, supplier:suppliers(id,name,segment,country)")
-          .order("session_id"),
-        supabase.from("audit_logs").select("session_id,turn_number,supplier_mindset").order("turn_number"),
-      ]);
+    queryKey: ["hollerau", "latest-env"],
+    queryFn: async (): Promise<Environment | null> => {
+      const { data, error } = await hollerau
+        .from("cases")
+        .select("environment")
+        .order("started_at", { ascending: false })
+        .limit(1);
       if (error) throw error;
-      const mind = new Map<string, string | null>();
-      (logs ?? []).forEach((l) => l.session_id && mind.set(l.session_id, l.supplier_mindset));
-      return (data ?? []).map((c) => ({ ...(c as unknown as CaseRow), mindset: mind.get(c.session_id) ?? null }));
+      return data[0]?.environment ?? null;
     },
   });
+}
+
+export function useSuppliers() {
+  return useQuery({
+    queryKey: ["hollerau", "suppliers"],
+    queryFn: async (): Promise<Map<string, Supplier>> => {
+      const { data, error } = await hollerau.from("suppliers").select("*");
+      if (error) throw error;
+      return new Map(data.map((s) => [s.id, s]));
+    },
+  });
+}
+
+export function supplierNames(c: CaseOverview, suppliers: Map<string, Supplier> | undefined): string {
+  if (!c.supplier_ids.length) return "—";
+  return c.supplier_ids.map((id) => suppliers?.get(id)?.name ?? id).join(", ");
+}
+
+export function useCaseOverview(environment: Environment | null, wave: number | null) {
+  useRealtime(["cases", "audit_logs"], [["hollerau"]]);
+  const latest = useLatestEnvironment();
+  const env = environment ?? latest.data ?? null;
+  return {
+    latestEnvironment: latest.data ?? null,
+    query: useQuery({
+      queryKey: ["hollerau", "case_overview", env, wave],
+      enabled: env != null,
+      queryFn: async (): Promise<CaseOverview[]> => {
+        let q = hollerau
+          .from("case_overview")
+          .select("*")
+          .eq("environment", env!)
+          .order("started_at", { ascending: false });
+        if (wave != null) q = q.eq("wave", wave);
+        const { data, error } = await q;
+        if (error) throw error;
+        return data;
+      },
+    }),
+  };
 }
 
 export function useCase(sessionId: string) {
-  useRealtime("audit_logs", [["audit", sessionId]]);
-  useRealtime("cases", [["case", sessionId]]);
+  useRealtime(["cases", "audit_logs"], [["hollerau"]]);
   const c = useQuery({
-    queryKey: ["case", sessionId],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("cases")
-        .select("*, supplier:suppliers(id,name,segment,country)")
+    queryKey: ["hollerau", "case", sessionId],
+    queryFn: async (): Promise<CaseOverview | null> => {
+      const { data, error } = await hollerau
+        .from("case_overview")
+        .select("*")
         .eq("session_id", sessionId)
         .maybeSingle();
       if (error) throw error;
-      return data as unknown as CaseRow | null;
+      return data;
     },
   });
   const logs = useQuery({
-    queryKey: ["audit", sessionId],
-    queryFn: async (): Promise<AuditRow[]> => {
-      const { data, error } = await supabase
+    queryKey: ["hollerau", "audit", sessionId],
+    queryFn: async (): Promise<AuditLog[]> => {
+      const { data, error } = await hollerau
         .from("audit_logs")
         .select("*")
         .eq("session_id", sessionId)
-        .order("turn_number");
+        .order("created_at");
       if (error) throw error;
-      return data as AuditRow[];
+      return data;
     },
   });
   return { c, logs };
 }
 
+export function useWaveScores() {
+  useRealtime(["cases"], [["hollerau"]]);
+  return useQuery({
+    queryKey: ["hollerau", "wave_scores"],
+    queryFn: async (): Promise<WaveScore[]> => {
+      const { data, error } = await hollerau
+        .from("wave_scores")
+        .select("*")
+        .order("environment")
+        .order("wave");
+      if (error) throw error;
+      return data;
+    },
+  });
+}
