@@ -114,9 +114,3 @@ export function useCase(sessionId: string) {
   return { c, logs };
 }
 
-/** Local per-second countdown between server updates. */
-export function useTick(seconds: number, active: boolean) {
-  const qc = useQueryClient();
-  void qc;
-  return { seconds, active };
-}
