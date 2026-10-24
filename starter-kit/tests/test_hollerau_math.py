@@ -143,3 +143,17 @@ def test_free_lever_goes_to_the_supplier_and_must_haves_hold(pkg):
     t = envelope(cases["case:P11"], {sup: events}, [sup], {sup: protocol("quality_first", "PL")}, pkg, {})
     target = t["threads"][sup]["target_terms"]
     assert target["ppm_commitment"] == 1500 and target["chargeback_eur_per_complaint"] == 500
+
+
+def test_stale_quotes_are_not_evidence(pkg):
+    """A part whose newest quote is old must not offer it as current evidence (seen on S02: 2025-07)."""
+    from hollerau.evidence import build_brief
+
+    newest = pkg.latest_quote_date()
+    assert newest is not None
+    cutoff = f"{int(newest[:4]) - 1}{newest[4:]}"
+    brief = build_brief(pkg, "sup:70340", "part:330030", None)
+    for item in brief["items"]:
+        if item["kind"] in ("own_quote", "rival_quote"):
+            date = item["sentence"].split("of ", 1)[1][:10]
+            assert date >= cutoff, item["sentence"]
