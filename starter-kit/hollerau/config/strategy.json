@@ -86,9 +86,7 @@
       "contract_months": ["contract term", "longer-term", "long-term", "framework", "planning security", "multi-year", "months"],
       "volume_per_year": ["volume", "commit to", "binding", "quantity"],
       "incoterm": ["freight", "transport", "logistics", "delivery terms", "incoterm"],
-      "lead_time_days": ["lead time", "lieferzeit", "capacity"],
-      "chargeback_eur_per_complaint": ["chargeback", "risk on our side", "too much risk"],
-      "ppm_commitment": ["ppm", "quality commitment", "too tight"]
+      "lead_time_days": ["lead time", "lieferzeit", "capacity"]
     }
   },
   "floor_pacing": {
@@ -96,7 +94,6 @@
     "enabled": true,
     "steps": [[3, 0.0], [6, 0.05], [9, 0.15]]
   },
-  "fallback_step_share": 0.15,
   "lever_friction_pct": 1.0,
   "friction_fields": ["lead_time_days", "index_clause", "incoterm", "effective_date", "tooling_eur"],
   "alternatives": {

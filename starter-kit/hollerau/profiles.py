@@ -110,7 +110,6 @@ class StrategyConfig(TypedDict):
     alternatives: AlternativesConfig
     lever_friction_pct: float  # % of price per changed non-price term: suppliers price our demands back in
     friction_fields: list[str]  # the terms friction applies to (not coverage / quality)
-    fallback_step_share: float  # a repeated holding counter moves this share of the gap
     llm: LLMConfig
 
 
