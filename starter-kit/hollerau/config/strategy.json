@@ -101,6 +101,9 @@
     "markers": ["alternative package", "which terms", "what else", "beyond price", "besides price"],
     "question": "Beyond price: which terms - payment days, a binding volume commitment, contract length, an index clause or lead time - would let you improve your price most? Please send us your best alternative packages."
   },
+  "claims": {"_comment": "docs/winners_analysis: Python attaches exactly one new checked claim (claims.py) to every offer, strongest first; Claude writes no data IDs itself. RFQs cite a cheaper rival bidder's live offer first. enabled=false = Claude cites from EVIDENCE as before.", "enabled": true, "rival_offer_factor": 0.995},
+  "owner_payment": {"_comment": "docs/winners_analysis: owner-run suppliers (sender 'Owner, ...') value fast payment far above our interest cost - all three EHL winners offered them 10-14 days (H29 Brandlhuber: -16.9 EUR in one step); our 90-day ask made P01 counter +3.15. Our target sheet uses the shortest payment option >= days. Skipped in relationship cases: our own maths run measured 90 days ahead there (P01 0.78 vs 0.57).", "enabled": true, "days": 14, "skip_relationship": true},
+  "capacity_respect": {"_comment": "docs/winners_analysis: in capacity cases never ask for a shorter lead time than the supplier offers (H15: asking 28 days triggered an overtime premium, 0.55 vs 0.89 for the team that took the standard).", "enabled": true, "fields": ["lead_time_days"]},
   "concession_guard": {"_comment": "Claude's counter-sheets may concede at most start + span x progress of the gap between our target and the supplier's standing sheet.", "start_share": 0.25, "span_share": 0.5},
   "lever_friction_pct": 1.0,
   "friction_fields": ["lead_time_days", "index_clause", "incoterm", "effective_date", "tooling_eur"],

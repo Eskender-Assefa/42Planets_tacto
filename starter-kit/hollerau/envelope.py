@@ -271,6 +271,43 @@ def _distance(terms: JSONObject, base: JSONObject, fields: list[str]) -> float:
     return d
 
 
+def respected_fields(case: JSONObject) -> list[str]:
+    """Capacity cases: terms the supplier is constrained on (docs/winners_analysis, H15)."""
+    cfg = config()["capacity_respect"]
+    return list(cfg["fields"]) if cfg["enabled"] and case.get("type") == "capacity" else []
+
+
+def _below(value: JSONValue, theirs: JSONValue) -> bool:
+    a, b = _num(value), _num(theirs)
+    return a is not None and b is not None and a < b
+
+
+def owner_run(events: list[Message]) -> bool:
+    """The supplier writes as its owner ('Owner, Giesserei ...'): a cash-hungry family firm."""
+    return any(m.get("from") != "buyer" and str(m.get("from_name") or "").lower().startswith("owner") for m in events)
+
+
+def owner_payment_terms(
+    case: JSONObject, terms: JSONObject, events: list[Message], relationship: bool = False
+) -> JSONObject:
+    """Owner-run suppliers value fast payment far above our interest cost (docs/winners_analysis:
+    all three EHL winners offered them 10-14 days). The sheet's payment term becomes the shortest
+    option at or above the configured days; other suppliers keep the engine's choice. Not in
+    relationship cases: there our own maths run measured 90 days ahead (P01 0.78 vs 0.57)."""
+    cfg = config()["owner_payment"]
+    neg = case.get("negotiable")
+    if not cfg["enabled"] or (relationship and cfg["skip_relationship"]) or not owner_run(events):
+        return terms
+    if not isinstance(neg, list) or "payment_days" not in neg:
+        return terms
+    options = _options(case, "payment_days")
+    days = sorted(int(o) for o in options if isinstance(o, int | float) and not isinstance(o, bool))
+    fit = [d for d in days if d >= cfg["days"]]
+    if not fit:
+        return terms
+    return complete_offer(case, {**terms, "payment_days": fit[0]})
+
+
 def best_package(
     case: JSONObject, base: JSONObject, price: float, std: JSONObject, est: SupplierEstimate | None
 ) -> tuple[JSONObject, float]:
@@ -288,11 +325,14 @@ def best_package(
     units = safe_cost(case, {**plain, "unit_price": price + 1.0}, std, est) - safe_cost(case, plain, std, est)
     friction = config()["lever_friction_pct"] / 100 * price * units if math.isfinite(units) and units > 0 else 0.0
     friction_fields = set(config()["friction_fields"])  # not coverage or quality terms: those are ours to set
+    held = respected_fields(case)
     best: tuple[JSONObject, float, float, float] | None = None  # terms, true C, choice C, distance
     for combo in combos:
         terms = complete_offer(case, {**base, **dict(zip(fields, combo, strict=True)), "unit_price": price})
         if not must_haves_ok(case, terms, std):
             continue
+        if any(_below(terms.get(f), base.get(f)) for f in held):
+            continue  # capacity: never ask less of the constrained term than the supplier offers
         c = safe_cost(case, terms, std, est)
         changed = sum(terms.get(f) != base.get(f) for f in fields if f in friction_fields)
         choice = c + friction * changed
@@ -499,6 +539,10 @@ def thread_envelope(
             # them walk (P10 in the first practice run), whatever our should-cost says
             target_price = round(price * (1 - cap / 100), 2)
             target_terms, ct = best_package(case, base, target_price, std, est_for_c)  # friction vs. their sheet
+        if target_terms is not None:
+            owner_terms = owner_payment_terms(case, target_terms, events, relationship)
+            if owner_terms != target_terms:
+                target_terms, ct = owner_terms, safe_cost(case, owner_terms, std, est_for_c)
         c_target = _finite(ct)
         if floor is not None:
             c_floor = _finite(best_package(case, base, floor, std, est_for_c)[1])

@@ -184,9 +184,13 @@ def test_waiting_thread_gets_a_holding_reply(p02):
     assert d["message"].get("term_sheets"), "expected a counter to keep a thread alive"
 
 
-def test_own_lower_quote_is_favourable_evidence(p02):
+def test_own_lower_quote_is_favourable_evidence(p02, monkeypatch):
     """Practice run 1: Donautal offered 6.05 after quoting 5.45 (P08); Kalwisz 47.00 after 45.15
-    (P11) - citable, verified, and never used."""
+    (P11) - citable, verified, and never used. Claims-off mode only: the post-ask replays showed the
+    arena answers these quotes 'irrelevant' (not a quote of this case), so claims.py omits them."""
+    from hollerau.profiles import config
+
+    monkeypatch.setitem(config()["claims"], "enabled", False)
     _, _, pkg = p02
     cases = {c["case_id"]: c for c in json.loads(CASES.read_text(encoding="utf-8"))}
     for name, sup in (("P08", "sup:70710"), ("P11", "sup:70140")):

@@ -109,6 +109,22 @@ class ConcessionGuardConfig(TypedDict):
     span_share: float
 
 
+class ClaimsConfig(TypedDict):
+    enabled: bool
+    rival_offer_factor: float  # cite a rival's live offer only when below our supplier's price x this
+
+
+class OwnerPaymentConfig(TypedDict):
+    enabled: bool
+    days: int  # owner-run suppliers: target payment term (the shortest option >= this)
+    skip_relationship: bool  # keep the engine's payment choice in stabilise / secure_supply cases
+
+
+class CapacityRespectConfig(TypedDict):
+    enabled: bool
+    fields: list[str]  # capacity cases: never ask a value below the supplier's own for these
+
+
 class StrategyConfig(TypedDict):
     segments: dict[str, SegmentConfig]
     cultures: dict[str, CultureConfig]
@@ -123,6 +139,9 @@ class StrategyConfig(TypedDict):
     alternatives: AlternativesConfig
     concession_guard: ConcessionGuardConfig
     ask_options: AskOptionsConfig
+    claims: ClaimsConfig
+    owner_payment: OwnerPaymentConfig
+    capacity_respect: CapacityRespectConfig
     lever_friction_pct: float  # % of price per changed non-price term: suppliers price our demands back in
     friction_fields: list[str]  # the terms friction applies to (not coverage / quality)
     llm: LLMConfig

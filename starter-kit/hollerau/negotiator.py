@@ -16,6 +16,7 @@ mathematical_justification is written here from the engine's numbers.
 import json
 import logging
 import os
+import re
 import time
 from collections.abc import Callable
 from typing import Literal, TypedDict, cast
@@ -26,7 +27,9 @@ from anthropic.types.beta import BetaMessageParam, BetaOutputConfigParam, BetaTe
 from arena_kit.agents.llm import ID_RE, LLMAgent
 
 from . import swaps as swap_engine
-from .envelope import Envelope, ThreadEnvelope, coverage, envelope, safe_cost
+from .claims import Claim, build_claims, rival_offer_claim
+from .claims import favourable as claim_favourable
+from .envelope import Envelope, ThreadEnvelope, coverage, envelope, owner_run, safe_cost
 from .evidence import Brief, build_brief
 from .kit import (
     JSONObject,
@@ -77,9 +80,13 @@ Rules:
 4. Trade, don't only haggle: offer levers that are cheap for us (negative or small EUR in LEVERS) in
    return for price; avoid levers that are expensive for us unless the price drop more than pays for
    them.
-5. Evidence: cite at most 3 data IDs per e-mail, each with its figure in the same sentence, copied
-   from EVIDENCE. Never cite an ID under ALREADY CITED or an item marked context-only. Use only
-   favourable evidence.
+5. Evidence: when a supplier block shows EVIDENCE THIS TURN, Python adds that one checked sentence to
+   your e-mail - never write data IDs (idx:, sc:, fc:, doc:, quote:, offer: ...) or copy EVIDENCE
+   figures yourself; you may refer to the point in words ("as the index data shows"). One new
+   argument per e-mail moves suppliers most. Optionally pick one news item (news_to_cite) instead,
+   only if it clearly weakens the supplier's position (spare capacity, lost customer, falling
+   costs); else "none". Without EVIDENCE THIS TURN: cite at most 3 data IDs, each with its figure in
+   the same sentence, copied from EVIDENCE; never an ID under ALREADY CITED or a context-only item.
 6. Read the supplier: stalled -> change the package, not just the price; final_offer or critical ->
    one last small push at most, then close; yielding -> keep your concessions small.
 7. accept takes the supplier's standing sheet as it is; walk_away ends the case without a deal (only
@@ -105,7 +112,10 @@ Rules:
 14. Ask, never only ask: in your first e-mail to each supplier (and when it stalls), after your
    offer, ask which non-price terms - payment days, volume commitment, contract length, index clause,
    lead time - would let it improve its price most, and invite its best alternative packages.
-15. reasoning_audit: observed_barrier = the resistance or signal you see from the supplier;
+15. Owner-run suppliers (marked OWNER-RUN) value fast payment more than anything: keep the TARGET's
+   short payment term in your sheets. Capacity cases: never ask a shorter lead time than the
+   supplier offers - it is the term it cannot give.
+16. reasoning_audit: observed_barrier = the resistance or signal you see from the supplier;
    strategic_intent = why this move and package, in one or two sentences, without numbers you did
    not copy."""
 
@@ -115,6 +125,7 @@ class CaseState(TypedDict):
     protocols: dict[str, Protocol]
     countries: dict[str, str | None]
     briefs: dict[str, Brief]
+    claims: dict[str, list[Claim]]  # per supplier: the checked-claim queue, strongest first
     labels: dict[str, dict[str, JSONValue]]  # field -> option label -> option value
 
 
@@ -153,6 +164,7 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         self.state: CaseState | None = None
         self.case_brief = ""
         self.cited: set[str] = set()
+        self.cited_offers: set[tuple[str, str]] = set()  # (supplier, rival offer id): once per supplier
         self.c_open: float | None = None
         self.seen: dict[str, float] = {}  # supplier message_id -> when this agent first saw it
         self.shown_attachments: set[str] = set()
@@ -196,10 +208,12 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
             "protocols": {sid: protocol(goal if isinstance(goal, str) else None, countries[sid]) for sid in suppliers},
             "countries": countries,
             "briefs": {sid: build_brief(self.pkg, sid, part, asked.get(sid)) for sid in suppliers} if self.pkg else {},
+            "claims": {sid: build_claims(self.pkg, case, sid) for sid in suppliers},
             "labels": labels,
         }
         self.case_brief = str(super().prepare(case))  # type: ignore[no-untyped-call]
         self.cited = set()
+        self.cited_offers = set()
         self.c_open = None
         self.seen = {}
         self.shown_attachments = set()
@@ -277,19 +291,27 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         # supplier, then Claude is asked about that thread only.
         neglected = self._neglected_thread(threads, live)
         if neglected is not None and neglected != env["best_supplier"] and len(live) > 1:
-            return self._fallback(case, threads, env, tel, neglected, "Thread close to the 60 s limit.")
+            held = self._fallback(case, threads, env, tel, neglected, "Thread close to the 60 s limit.")
+            self._attach_claim(held, env)
+            self._remember_citations(held)
+            return held
         focus = [neglected] if neglected is not None else None
         self._prepare_swaps(case, threads, env, tel)
 
+        news_id: str | None = None
         try:
             raw, latency = self._ask_claude(case, threads, env, tel, secs, focus)
+            dec = raw.get("decision")
+            pick = dec.get("news_to_cite") if isinstance(dec, dict) else None
+            news_id = pick if isinstance(pick, str) and pick != "none" else None
             checked = self._validate(case, threads, env, tel, raw, latency)
         except (anthropic.APIError, ValueError, KeyError, TypeError, StopIteration) as e:
             log.warning("Claude unavailable or invalid (%s) - deterministic move", e)
             checked = None
         if checked is None:
-            checked = self._fallback(case, threads, env, tel)
+            checked, news_id = self._fallback(case, threads, env, tel), None
         self._note_swap(checked)
+        self._attach_claim(checked, env, news_id)
         self._ask_for_options(checked, threads, tel)
         self._remember_citations(checked)
         return checked
@@ -360,6 +382,85 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         if any(marker in body.lower() for marker in cfg["markers"]):
             return  # Claude already asked in its own words
         msg["body"] = self._insert_before_closing(body, cfg["question"])
+
+    # -- checked claims, one per offer (claims.py) ------------------------------------------------
+
+    def _news_items(self, sid: str) -> dict[str, str]:
+        """Citable news / release items about this supplier not cited yet: id -> sentence."""
+        brief = self.state["briefs"].get(sid) if self.state else None
+        items = brief["items"] if brief else []
+        return {
+            i["refs"][0]: i["sentence"]
+            for i in items
+            if i["kind"] in ("news", "release") and len(i["refs"]) == 1 and i["refs"][0] not in self.cited
+        }
+
+    def _next_claim(self, sid: str, env: Envelope) -> Claim | None:
+        """This turn's claim for `sid`: in an RFQ a cheaper rival's live offer first, then the case's
+        queue in order - skipping IDs already cited (duplicates) and EUR figures above the offer."""
+        if self.state is None or sid not in env["threads"]:
+            return None
+        te = env["threads"][sid]
+        price = te["standing_price"]
+        cfg = config()["claims"]
+        rivals: list[tuple[float, str]] = []
+        for other, x in env["threads"].items():
+            if other != sid and x["sheet_id"] and x["standing_price"] is not None:
+                rivals.append((x["standing_price"], x["sheet_id"]))
+        if rivals and price is not None:
+            low, offer_id = min(rivals)
+            if low < price * cfg["rival_offer_factor"] and (sid, offer_id) not in self.cited_offers:
+                return rival_offer_claim(offer_id, low)
+        for claim in self.state["claims"].get(sid, []):
+            if any(r in self.cited for r in claim["refs"]):
+                continue
+            factor = PRICE_EVIDENCE.get(claim["kind"], PRICE_EVIDENCE["own_quote"])
+            if claim_favourable(claim, price, factor):
+                return claim
+        return None
+
+    @staticmethod
+    def _strip_ids(body: str) -> str:
+        """Drop every sentence that cites a data ID: the model's own citations were the ones the arena
+        found irrelevant or could not read (a window needs both idx IDs)."""
+        out = []
+        for line in body.split("\n"):
+            if ID_RE.search(line):
+                kept = [s for s in re.split(r"(?<=[.!?])\s+", line) if not ID_RE.search(s)]
+                line = " ".join(kept)
+                if not line.strip():
+                    continue
+            out.append(line)
+        return "\n".join(out)
+
+    def _attach_claim(self, d: JSONObject, env: Envelope, news_id: str | None = None) -> None:
+        """Exactly one new checked claim on every offer we send (docs/winners_analysis)."""
+        if not config()["claims"]["enabled"]:
+            return
+        sid = str(d.get("supplier_id"))
+        msg = d.get("message")
+        if not isinstance(msg, dict) or msg.get("action") or not msg.get("term_sheets"):
+            return
+        body = msg.get("body")
+        if not isinstance(body, str):
+            return
+        body = self._strip_ids(body)
+        news = self._news_items(sid)
+        claim: Claim | None = None
+        if news_id and news_id in news:
+            claim = {"kind": "news", "sentence": news[news_id], "refs": [news_id], "price": None}
+        else:
+            claim = self._next_claim(sid, env)
+        if claim is not None:
+            body = self._insert_before_closing(body, claim["sentence"])
+            if claim["kind"] == "rival_offer":
+                self.cited_offers.add((sid, claim["refs"][0]))
+            audit = msg.get("reasoning_audit")
+            if isinstance(audit, dict) and isinstance(audit.get("mathematical_justification"), str):
+                audit["mathematical_justification"] = (
+                    str(audit["mathematical_justification"]) + f" | claim attached: {claim['kind']}"
+                )
+        msg["body"] = body
 
     @staticmethod
     def _insert_before_closing(body: str, text: str) -> str:
@@ -451,6 +552,24 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
                 continue
             labels = self.state["labels"].get(f)
             sheet[f] = {"type": "string", "enum": list(labels)} if labels else {"type": "number"}
+        decision: JSONObject = {
+            "supplier_id": {"type": "string", "enum": cast(JSONValue, live)},
+            "action": {"type": "string", "enum": ["send", "accept", "walk_away"]},
+            "subject": {"type": "string"},
+            "outbound_email_text": {"type": "string"},
+            "term_sheets": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": sheet,
+                    "required": list(sheet),
+                    "additionalProperties": False,
+                },
+            },
+        }
+        if config()["claims"]["enabled"]:
+            news = sorted({i for sid in live for i in self._news_items(sid)})
+            decision["news_to_cite"] = {"type": "string", "enum": cast(JSONValue, ["none", *news])}
         return {
             "type": "object",
             "properties": {
@@ -462,22 +581,8 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
                 },
                 "decision": {
                     "type": "object",
-                    "properties": {
-                        "supplier_id": {"type": "string", "enum": cast(JSONValue, live)},
-                        "action": {"type": "string", "enum": ["send", "accept", "walk_away"]},
-                        "subject": {"type": "string"},
-                        "outbound_email_text": {"type": "string"},
-                        "term_sheets": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": sheet,
-                                "required": list(sheet),
-                                "additionalProperties": False,
-                            },
-                        },
-                    },
-                    "required": ["supplier_id", "action", "subject", "outbound_email_text", "term_sheets"],
+                    "properties": decision,
+                    "required": list(decision),
                     "additionalProperties": False,
                 },
             },
@@ -580,8 +685,23 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
                 f"{t['concession_velocity']}% of C_open per round, {t['moves_left']} messages left, "
                 f"claim verdicts so far {json.dumps(t['claims'])}.",
             ]
+            if owner_run(threads[sid]):
+                out.append("OWNER-RUN supplier: it values fast payment - keep the TARGET's short payment term.")
             brief = self.state["briefs"].get(sid)
-            if brief:
+            if config()["claims"]["enabled"]:
+                nxt = self._next_claim(sid, env)
+                out.append(
+                    f"EVIDENCE THIS TURN (Python adds it to your e-mail; refer to it in words, no IDs): "
+                    f"{nxt['sentence'] if nxt else 'none left - argue with the package, not new data'}"
+                )
+                if brief:
+                    news = self._news_items(sid)
+                    if news:
+                        out.append("NEWS (news_to_cite candidates): " + "; ".join(f"{k}: {v}" for k, v in news.items()))
+                    context = [i["sentence"] for i in brief["items"] if not i["refs"]]
+                    if context:
+                        out.append("BACKGROUND (context only): " + " ".join(context))
+            elif brief:
                 out.append("EVIDENCE (copy figures exactly):")
                 for item in brief["items"]:
                     fav = item["favourable"]
