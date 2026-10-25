@@ -15,8 +15,8 @@ A swap is offered only if its sheet costs us less than the supplier's standing s
 import math
 from typing import TypedDict
 
-from .envelope import ThreadEnvelope, lever_fields, safe_cost
-from .kit import JSONObject, JSONValue, Message, complete_offer
+from .envelope import ThreadEnvelope, lever_fields, price_for_cost, safe_cost
+from .kit import JSONObject, JSONValue, Message, complete_offer, must_haves_ok
 from .profiles import SwapsConfig
 
 FREE_EUR = 1.0  # a lever change costing us less than this is a free chip
@@ -109,3 +109,36 @@ def swaps(case: JSONObject, te: ThreadEnvelope, events: list[Message], cfg: Swap
 def stalled(velocity: float | None, sent: int, cfg: SwapsConfig) -> bool:
     """A concession step below the trigger after we have written at least once."""
     return sent >= 1 and velocity is not None and velocity < cfg["trigger_velocity_pct"]
+
+
+def equivalents(
+    case: JSONObject, te: ThreadEnvelope, events: list[Message], cfg: SwapsConfig, n: int = 2
+) -> list[JSONObject]:
+    """MESO: for a lever the supplier's latest message pushes back on, our target sheet with that
+    lever moved toward the supplier and the price lowered just enough that our C stays the same
+    (P11: 'a EUR 500 chargeback is too high' -> also offer EUR 300 / 150 at matching prices, let it pick)."""
+    base, sp = te["target_terms"], te["standing_price"]
+    if not cfg["enabled"] or not base or sp is None:
+        return []
+    c_base = safe_cost(case, base, te["standard"], te["supplier_estimate"])
+    if not math.isfinite(c_base):
+        return []
+    resisted = wants(events, cfg, last_n=1)
+    out: list[tuple[float, JSONObject]] = []
+    for field in lever_fields(case):
+        if field not in resisted:
+            continue
+        for value in _options(case, field):
+            if value == base.get(field):
+                continue
+            moved = complete_offer(case, {**base, field: value})
+            if not must_haves_ok(case, moved, te["standard"]):
+                continue
+            price = price_for_cost(case, moved, c_base, te["standard"])
+            base_price = base.get("unit_price")
+            if price is None or not isinstance(base_price, int | float) or not 0 < price < base_price:
+                continue  # relief for the supplier is paid for with a lower price - equal C for us
+            sheet = complete_offer(case, {**moved, "unit_price": price})
+            out.append((base_price - price, sheet))
+    out.sort(key=lambda x: x[0])  # smallest price give-back first: the gentlest relief options
+    return [sheet for _, sheet in out[:n]]

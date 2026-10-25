@@ -125,3 +125,41 @@ def test_floor_pacing_anchors_at_the_calibrated_floor_then_steps_up(ctx):
     assert first["target_price"] == pytest.approx(first["price_floor_est"], abs=0.02)  # anchor on the floor
     fourth = target(7)  # 3 buyer messages sent -> message 4: + 5 % of the envelope
     assert first["target_price"] < fourth["target_price"] <= fourth["standing_price"]
+
+
+def test_resisted_lever_gets_equal_cost_variants(ctx):
+    """P11: 'a EUR 500 chargeback is too high' -> also offer lower chargebacks at prices that keep our
+    C equal, so the supplier picks the relief it values most (MESO)."""
+    from hollerau.envelope import safe_cost
+    from hollerau.swaps import equivalents
+
+    case, events, env = _te(ctx, "P11", "sup:70140", "quality_first", 3)
+    te = env["threads"]["sup:70140"]
+    variants = equivalents(case, te, events, config()["swaps"])
+    assert variants
+    c_target = safe_cost(case, te["target_terms"], te["standard"])
+    for v in variants:
+        assert v["chargeback_eur_per_complaint"] < te["target_terms"]["chargeback_eur_per_complaint"]
+        assert v["unit_price"] < te["target_terms"]["unit_price"]
+        assert abs(safe_cost(case, v, te["standard"]) - c_target) < 0.002 * c_target  # equivalent for us
+
+
+def test_holding_counter_never_repeats_the_same_ask(ctx):
+    """P05: repeating EUR 24.43 drew 'come back with a real step' - the fallback steps instead."""
+    from hollerau.negotiator import HollerauAgent
+    from hollerau.telemetry import telemetry
+
+    cases, pkg = ctx
+    case, sup = cases["case:P08"], "sup:70710"
+    events = _threads("P08")[sup][:3]  # we already asked once; the supplier replied
+    env = envelope(case, {sup: events}, [sup], {sup: protocol("leverage", "DE")}, pkg, {sup: "DE"})
+    te = env["threads"][sup]
+    last = HollerauAgent._last_ask(events)
+    te["target_price"] = last  # make the engine target equal our last ask
+    te["target_terms"] = {**te["target_terms"], "unit_price": last}
+    agent = HollerauAgent(StandInClient(), pkg)
+    agent.state = agent._prepare_case(case)
+    tel = {sup: telemetry(case, sup, events, env["c_open"])}
+    d = agent._fallback(case, {sup: events}, env, tel, sup, "test")
+    new = d["message"]["term_sheets"][0]["terms"]["unit_price"]
+    assert last < new < te["standing_price"]

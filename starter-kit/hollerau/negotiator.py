@@ -155,6 +155,7 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         self.shown_attachments: set[str] = set()
         self.alt_proposed: set[tuple[str, str]] = set()  # (supplier, alternative terms) already proposed back
         self.swaps: dict[str, list[swap_engine.Swap]] = {}
+        self.meso: dict[str, list[JSONObject]] = {}  # equivalent variants for resisted levers
         self.mandatory: dict[str, swap_engine.Swap] = {}
 
     # -- per case ------------------------------------------------------------------------------
@@ -330,6 +331,20 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         }
         why = f"Its alternative costs us {_eur(main_c - c)} less than its main sheet."
         return d, (why, "Take the supplier's own cheaper alternative instead of its main sheet.")
+
+    @staticmethod
+    def _last_ask(events: list[Message]) -> float | None:
+        """The unit price of our latest term sheet in this thread."""
+        for m in reversed(events):
+            if m.get("from") != "buyer":
+                continue
+            sheets = m.get("term_sheets")
+            first = sheets[0] if isinstance(sheets, list) and sheets else None
+            terms = first.get("terms") if isinstance(first, dict) else None
+            price = terms.get("unit_price") if isinstance(terms, dict) else None
+            if isinstance(price, int | float):
+                return float(price)
+        return None
 
     def _neglected_thread(self, threads: Threads, live: list[str]) -> str | None:
         """The live thread whose unanswered supplier message has waited longest, if longer than
@@ -529,6 +544,7 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
                 f"Our target covers {self._pct(te['target_coverage_pct'])}.",
                 f"POSITION: {env['position']} - {config()['leverage']['guidance'].get(env['position'], '')}",
                 *([block] if (block := self._swaps_block(sid)) else []),
+                *([meso] if (meso := self._meso_block(sid)) else []),
                 "LEVERS (EUR change in our C vs. their standing sheet, same price; negative = saves us): "
                 + "; ".join(f"{lv['field']}={option_label(lv['value'])}: {lv['delta_eur']:+,.0f}" for lv in levers),
                 f"TELEMETRY: status {t['status']}, mindset {t['mindset']}, concession velocity "
@@ -607,8 +623,12 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         self.swaps, self.mandatory = {}, {}
         if not cfg["enabled"]:
             return
+        self.meso = {}
         for sid, te in env["threads"].items():
             events = threads.get(sid, [])
+            variants = swap_engine.equivalents(case, te, events, cfg)
+            if variants:
+                self.meso[sid] = variants
             found = swap_engine.swaps(case, te, events, cfg)
             if not found:
                 continue
@@ -636,6 +656,16 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
                 f"{json.dumps(s['sheet'])}, C {_eur(s['c_true'])}"
             )
         return "SWAPS (Python-priced trades): " + " ; ".join(lines)
+
+    def _meso_block(self, sid: str) -> str:
+        variants = self.meso.get(sid)
+        if not variants:
+            return ""
+        shown = " ; ".join(json.dumps(v) for v in variants)
+        return (
+            "EQUIVALENT OFFERS (same cost for us; they will be attached after your first sheet - present "
+            f"them as options A/B/C and let the supplier choose): {shown}"
+        )
 
     def _note_swap(self, d: JSONObject) -> None:
         sid = str(d.get("supplier_id"))
@@ -737,6 +767,9 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
             if must is not None and not self._has_sheet(sheets_out, must["sheet"]):
                 trade: JSONValue = {"terms": must["sheet"]}
                 sheets_out = [trade, *sheets_out][:3]  # the trade goes first
+            for variant in self.meso.get(sid, []):  # equal C for us: the supplier picks (MESO)
+                if len(sheets_out) < 3 and not self._has_sheet(sheets_out, variant):
+                    sheets_out.append({"terms": variant})
             msg["term_sheets"] = sheets_out
         return self._with_audit(case, d, env, tel, "claude", observed, intent, latency)
 
@@ -827,6 +860,13 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
             return self._with_audit(case, d, env, tel, "fallback", "Last chance to close.", "Close on the best sheet.")
         terms = complete_offer(case, te["target_terms"])
         price = _num(terms.get("unit_price"))
+        # Never repeat the same ask: a holding reply that does not move reads as a stonewall (P05:
+        # "Without movement from your side we cannot move either"). Step a share of the gap.
+        last = self._last_ask(threads.get(sid, []))
+        standing = te["standing_price"]
+        if price is not None and last is not None and standing is not None and price <= last + 0.005 < standing:
+            price = round(last + (standing - last) * config()["fallback_step_share"], 2)
+            terms = complete_offer(case, {**terms, "unit_price": price})
         body = (
             "Dear Sir or Madam,\n\nthank you for your offer. To move forward we propose the attached terms"
             + (f", at a unit price of EUR {price:,.2f}" if price is not None else "")
