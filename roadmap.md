@@ -1,5 +1,5 @@
 # Roadmap
-- [ ] Add negotiation mechanism/evidence helpers and tests, supplier-separated price paths, case summaries, score chart, and printable pitch view; verify with real P07 data.
+- [x] Add negotiation mechanism/evidence helpers and tests, supplier-separated price paths, case summaries, score chart, and printable pitch view; verified real P07 claim/evidence and paced turns, RFQ supplier selection, score-bar navigation, and print contrast.
 - [x] Dashboard views A–D with live updates
 - [x] Switch data source to the Hollerau backend (read-only; empty states when no cases)
 - [ ] Connect GitHub sync (user does this in Project settings → Git)

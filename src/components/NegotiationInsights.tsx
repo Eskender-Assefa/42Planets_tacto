@@ -56,6 +56,8 @@ export function NegotiationPath({ c, logs, suppliers }: { c: CaseOverview; logs:
   const points = orderedTurns(logs.filter((l) => l.supplier_id === active));
   const last = points.at(-1);
   const deal = c.status === "deal" && c.c_deal != null && (c.deal_supplier_id === active || (!c.deal_supplier_id && ids.length === 1)) && last ? { turn: last.turn_number, cost: c.c_deal } : null;
+  const plottedCosts = [c.c_open, c.c_best, c.c_alt, deal?.cost, ...points.flatMap((l) => [l.c_supplier_offer, l.c_proposed])].filter((v): v is number => v != null && Number.isFinite(v));
+  const costDomain: [number | "auto", number | "auto"] = plottedCosts.length ? [Math.min(...plottedCosts), Math.max(...plottedCosts)] : ["auto", "auto"];
   return <section className="negotiation-path mb-8 min-w-0 border-y border-border py-5">
     <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
       <h2 className="text-xl font-semibold">Negotiation path</h2>
@@ -65,7 +67,7 @@ export function NegotiationPath({ c, logs, suppliers }: { c: CaseOverview; logs:
       <LineChart accessibilityLayer data={points} margin={{ top: 25, right: 22, bottom: 10, left: 12 }}>
         <CartesianGrid vertical={false} stroke="var(--border)" />
         <XAxis dataKey="turn_number" type="number" domain={["dataMin", "dataMax"]} allowDecimals={false} tickLine={false} axisLine={false} label={{ value: "Turn", position: "insideBottom", offset: -7, fill: "var(--muted-foreground)" }} />
-        <YAxis tickFormatter={shortEur} width={78} domain={["auto", "auto"]} tickLine={false} axisLine={false} />
+        <YAxis tickFormatter={shortEur} width={78} domain={costDomain} tickLine={false} axisLine={false} padding={{ top: 18, bottom: 18 }} />
         <ChartTooltip content={<ChartTooltipContent labelFormatter={(_, payload) => `Turn ${payload[0]?.payload.turn_number ?? "-"} · ${decisionLabel(payload[0]?.payload.decision_source)}`} formatter={(value, name) => <div className="flex w-full justify-between gap-4"><span>{String(name)}</span><span className="num">{eur(typeof value === "number" ? value : null)}</span></div>} />} />
         {([["Opening", c.c_open], ["Best possible", c.c_best], ["Alternative (no deal)", c.c_alt]] as const).map(([label, value], i) => value == null ? null : <ReferenceLine key={label} y={value} ifOverflow="extendDomain" stroke={i === 1 ? "var(--success)" : "var(--muted-foreground)"} strokeDasharray="4 4" label={{ value: label, position: "insideTopRight", fill: "var(--muted-foreground)", fontSize: 10 }} />)}
         <Line name="Supplier offer" dataKey="c_supplier_offer" stroke="var(--primary)" strokeWidth={2} dot={{ r: 4 }} isAnimationActive={false} connectNulls={false} />
