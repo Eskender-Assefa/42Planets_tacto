@@ -162,3 +162,20 @@ def test_stale_quotes_are_not_evidence(pkg):
         if item["kind"] in ("own_quote", "rival_quote"):
             date = item["sentence"].split("of ", 1)[1][:10]
             assert date >= cutoff, item["sentence"]
+
+
+def test_strategic_terms_are_chosen_at_a_realistic_price(pkg):
+    """Maths run: terms picked at the deep target price (30 days) lost at the real closing price;
+    P01/P03 scored 0.78/0.92 with 90 days (P01 also a late effective date). Terms now come from the
+    supplier's current price."""
+    _need(CASES)
+    cases = {c["case_id"]: c for c in json.loads(CASES.read_text(encoding="utf-8"))}
+    for name, sup in (("P01", "sup:70110"), ("P03", "sup:70530")):
+        path = DATA / "cases" / f"{name}_threads.json"
+        if not path.exists():
+            pytest.skip(f"fixture missing: {path}")
+        events = json.loads(path.read_text(encoding="utf-8"))[sup][:1]
+        env = envelope(
+            cases[f"case:{name}"], {sup: events}, [sup], {sup: protocol("stabilise", "DE")}, pkg, {sup: "DE"}
+        )
+        assert env["threads"][sup]["target_terms"]["payment_days"] == 90, name

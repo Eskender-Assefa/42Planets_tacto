@@ -337,22 +337,27 @@ def _relationship_target(
     proto: Protocol,
     aggr: float = 1.0,
 ) -> tuple[float, JSONObject, float]:
-    """Price grid search for the lowest true C (price saving vs. supplier-health charge), never
-    below the supplier's estimated floor: a price it cannot accept is no target at all."""
+    """Lowest true C (price saving vs. supplier-health charge). Non-price terms are chosen at the
+    supplier's current price - where strategic deals actually close - and only then the price is
+    searched with those terms fixed. Choosing them at the deep target price picked short payment
+    terms that lost at the real closing price (P01/P03 maths run: 30 days scored 0.57/0.78 where
+    90 days had scored 0.78/0.92)."""
     search = config()["relationship_price_search"]
+    levers, _ = best_package(case, base, price, std, est)  # terms for a realistic closing price
     # No clamp at a should-cost 'floor': strategic suppliers do accept below it (P02 took 357.99);
-    # the supplier-health charge - now priced with the calibrated full cost - sets the optimum.
+    # the supplier-health charge - priced with the calibrated full cost - sets the optimum.
     low = price * search["low_pct_of_offer"] / 100
     steps = max(search["steps"], 10)
     grid = [low + (price - low) * i / steps for i in range(steps + 1)]
     best_p, best_c = price, math.inf
     for cand in grid:
-        terms, c = best_package(case, base, round(cand, 2), std, est)
+        c = safe_cost(case, {**levers, "unit_price": round(cand, 2)}, std, est)
         if c < best_c:
             best_p, best_c = round(cand, 2), c
     anchor = proto["segment"].get("anchor_below_target_pct", 0.0) * aggr
     ask = round(best_p * (1 - anchor / 100 * (1 - p)), 2)  # start a little below, land on it
-    terms, c = best_package(case, base, ask, std, est)  # friction measured against the supplier's sheet
+    terms = complete_offer(case, {**levers, "unit_price": ask})
+    c = safe_cost(case, terms, std, est)
     return ask, terms, c
 
 
