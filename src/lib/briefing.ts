@@ -2,7 +2,7 @@ import type { AuditLog, CaseOverview, Terms } from "@/integrations/hollerau/type
 import { extractEvidence, evidenceIdPattern, finalDealTerms, orderedTurns, parseMechanisms, summarizeMoves } from "@/lib/telemetry";
 
 export type BriefingMode = "summary" | "full";
-const clean = (value: string | null | undefined) => (value ?? "").replace(evidenceIdPattern(), "").replace(/\bEUR\b/g, "euros").replace(/[|_<>€]/g, " ").replace(/\s+/g, " ").trim();
+const clean = (value: string | null | undefined) => (value ?? "").replace(evidenceIdPattern(), "").replace(/\bEUR\b/g, "euros").replace(/&/g, " and ").replace(/[|_<>€]/g, " ").replace(/\s+/g, " ").trim();
 const number = (n: number) => Number(n.toFixed(2)).toString();
 export function spokenMoney(value: number): string {
   const sign = value < 0 ? "minus " : "";
@@ -50,7 +50,7 @@ export function buildBriefingScript(c: CaseOverview, logs: AuditLog[], supplierN
   const title = clean(c.title);
   if (title || names.length) sentences.push(`Briefing${title ? ` for ${title}` : ""}${names.length ? `, with ${list(names)}` : ""}.`);
   const type = c.case_type ? types[c.case_type.toLowerCase().replace(/[ -]/g, "_")] : null;
-  if (type) sentences.push(`This is a ${type} negotiation.`);
+  if (type) sentences.push(`This is ${/^[aeiou]/i.test(type) ? "an" : "a"} ${type} negotiation.`);
   const rounds = c.last_turn ?? turns.at(-1)?.turn_number;
   const winner = c.deal_supplier_id ? clean(supplierName(c.deal_supplier_id)) : "";
   if (c.status === "deal") sentences.push(`We closed a deal${winner && winner !== "-" && winner !== c.deal_supplier_id ? ` with ${winner}` : ""}${rounds != null ? ` after ${rounds} rounds` : ""}.`);

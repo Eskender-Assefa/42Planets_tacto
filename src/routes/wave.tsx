@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { Switch } from "@/components/ui/switch";
 import { buildLiveSentence, freshNarration } from "@/lib/briefing";
 import { useSpeech } from "@/hooks/useSpeech";
+import { hollerau } from "@/integrations/hollerau/client";
 import { Shell, MindsetBadge, StatusDot } from "@/components/Shell";
 import { useCaseOverview, useSuppliers, supplierNames, clock, scoreLabel, secondsRemaining } from "@/lib/command";
 import type { CaseOverview, Environment } from "@/integrations/hollerau/types";
@@ -33,7 +34,7 @@ function Wave() {
   const speech = useSpeech([]);
   const rows = useRef<CaseOverview[]>([]);
   const seen = useRef(new Set<string>());
-  const { query, latestEnvironment } = useCaseOverview(env, wave, ({ table, row }) => {
+  const { query, latestEnvironment } = useCaseOverview(env, wave, async ({ table, row }) => {
     if (!narration) return;
     const c = rows.current.find((item) => item.session_id === row.session_id);
     if (!c) return;
@@ -47,12 +48,20 @@ function Wave() {
       const key = `finished-${row.session_id}-${row.status}`;
       if (seen.current.has(key)) return;
       seen.current.add(key);
-      // Cases events contain stored outcome values, not the overview's latest turn.
-      speech.enqueue(buildLiveSentence({ ...c, ...row }, null, (id) => suppliers.data?.get(id)?.name ?? ""), row.ended_at);
+      // Read the accepted price for the winning supplier, never infer it from cost.
+      let last = null;
+      if (row.status === "deal") {
+        let request = hollerau.from("audit_logs").select("*").eq("session_id", row.session_id).order("created_at", { ascending: false }).limit(1);
+        if (row.deal_supplier_id) request = request.eq("supplier_id", row.deal_supplier_id);
+        const result = await request;
+        last = result.data?.[0] ?? null;
+      }
+      if (narrationEnabled.current && rows.current.some((item) => item.session_id === c.session_id)) speech.enqueue(buildLiveSentence({ ...c, ...row }, last, (id) => suppliers.data?.get(id)?.name ?? ""), row.ended_at);
     }
   });
   const suppliers = useSuppliers();
   const data = query.data ?? [];
+  const narrationEnabled = useRef(narration); narrationEnabled.current = narration;
   rows.current = data;
   useEffect(() => { speech.stop(); seen.current.clear(); }, [env, wave, narration, speech.stop]);
   const activeEnv = env ?? latestEnvironment;
