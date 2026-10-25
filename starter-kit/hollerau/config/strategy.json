@@ -95,7 +95,7 @@
     "steps": [[3, 0.0], [6, 0.05], [9, 0.15]]
   },
   "lever_friction_pct": 1.0,
-  "friction_fields": ["lead_time_days", "payment_days", "index_clause", "incoterm", "effective_date", "tooling_eur"],
+  "friction_fields": ["lead_time_days", "index_clause", "incoterm", "effective_date", "tooling_eur"],
   "alternatives": {
     "_comment": "Propose a supplier's own alternative sheet back when it is cheaper for us than the main sheet by at least this (EUR / % of C).",
     "min_gain_eur": 500.0,
