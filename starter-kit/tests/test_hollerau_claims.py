@@ -43,22 +43,28 @@ def _figures(sentence):
 
 def test_every_claim_follows_the_arena_rules(world):
     """Each claim's IDs exist, its figure matches the fact within the arena's tolerance, an index
-    window is two months of one series <= 12 apart, and no quote of another case is cited."""
-    from hollerau.claims import build_claims
+    window is two months of one of the part's cost drivers <= 12 apart ending within the last 12
+    months of all index data (live post-winners check: other series and a 2025-09 end were
+    'irrelevant'), and no quote of another case is cited."""
+    from hollerau.claims import build_claims, data_last_month
 
     cases, pkg = world
     facts = pkg.data.facts
+    newest = _months(data_last_month(pkg))
     seen_kinds = set()
     for case in cases.values():
+        drivers = {d["series_id"] for d in pkg.cost_drivers(case["parts"][0])}
         for sup in case["suppliers"]:
             for c in build_claims(pkg, case, sup):
                 seen_kinds.add(c["kind"])
                 assert all(r in facts for r in c["refs"]), c
                 assert not any(r.startswith(("quote:", "offer:")) for r in c["refs"]), c
+                assert not re.search(r"\d,\d", c["sentence"]), c  # "2,376 ppm" was read as 2.376 (P11)
                 figs = _figures(c["sentence"])
                 if c["kind"] == "index":
                     (s1, m1), (s2, m2) = IDX.findall(" ".join(c["refs"]))
                     assert s1 == s2 and 1 <= _months(m2) - _months(m1) <= 12, c
+                    assert s1 in drivers and newest - _months(m2) <= 11, c
                     a, b = facts[c["refs"][0]]["value"], facts[c["refs"][1]]["value"]
                     assert any(abs(f - (b / a - 1) * 100) <= 0.5 for f in figs), c
                 elif c["kind"] == "notice":
@@ -118,10 +124,13 @@ def test_one_claim_per_offer_and_no_model_citations(world):
     agent = HollerauAgent(StandIn(_reply(sup, body, 356.0, {"payment_days": "90", "index_clause": "none"})), pkg)
     d = agent.decide(case, {sup: events})
     out = d["message"]["body"]
-    assert "idx:PPI-D351@2026-08)" not in out.replace("idx:PPI-D351@2025-02, idx:PPI-D351@2026-02", "")
+    assert "PPI-D351" not in out  # the model's sentence is gone (and energy is no driver of this part)
+    from hollerau.claims import build_claims
+
+    expected = build_claims(pkg, case, sup)[0]
     ids = re.findall(r"\b(?:idx|sc|fc|doc|ctr|cost|po|quote|offer|news):[\w.:@#/-]*\w", out)
-    assert len(ids) == 2 and all(i.startswith("idx:PPI-D351@") for i in ids), out
-    assert "claim attached: index" in d["message"]["reasoning_audit"]["mathematical_justification"]
+    assert ids == expected["refs"] and expected["sentence"] in out, out
+    assert f"claim attached: {expected['kind']}" in d["message"]["reasoning_audit"]["mathematical_justification"]
     first = set(ids)
     # the supplier answers; our next offer brings a different argument
     reply = {**events[0], "message_id": "msg:70510-1-9", "from": "sales@70510", "claim_results": []}

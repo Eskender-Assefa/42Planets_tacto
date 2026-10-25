@@ -3,9 +3,15 @@
 State on 2026-10-25 (Sunday). Code freeze **13:00** - submit the final commit hash.
 
 ## Current candidate
-- `post-winners` (claims.py + owner payment + capacity lead time; see docs/winners_analysis) -
-  offline tests + sim pass (sim 2.504, unchanged: the scripted sim ignores claims). NOT yet live-checked:
-  keep it only if the same 5-case live check beats **2.290**; else revert to `post-ask`.
+- `post-winners-fix` is the final candidate: `post-winners` (claims.py + owner payment + capacity
+  lead time; see docs/winners_analysis) plus two claim fixes learned live - index claims only from
+  the part's cost drivers, recency counted from the newest month of all index data (energy index
+  and a 2025-09 window came back 'irrelevant'); no thousands separators ("2,376 ppm" was read as
+  2.376 -> contradicted).
+  Live: 5-case check 2.621 (post-winners) -> **3.327** (with fixes, 14/14 claims verified);
+  full 10-case run **69.8** (vs 55.8 `post-guard`), 31/32 claims verified; the one failure was
+  P11's separator (0.04), re-run with the fix 0.287 -> about 72.3 over the 10 cases.
+  Weakest left: P11 (1500 ppm + EUR 500 chargeback ask makes Kalwisz raise its price).
   Switches in config/strategy.json: `claims.enabled`, `owner_payment.enabled`, `capacity_respect.enabled`.
 - `post-ask` (commit `1f62a23`): live check of P02+P07+P08+P10+P18
   summed to **2.290** (bar 2.19 from `post-guard`), no zero: P02 .19, P07 .62, P08 .54, P10 .66, P18 .27.

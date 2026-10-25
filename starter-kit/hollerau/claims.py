@@ -10,12 +10,17 @@ claims 'irrelevant' (own offer cited as a rival, other cases' quotes) and no ind
 So Python writes the claim sentences here, every figure copied from the facts the arena checks
 against, and attaches one per outgoing offer, strongest first. Rules followed:
 - idx: two months of one series, at most 12 months apart, ending within the last 12 months of the
-  series; the most favourable such window of the part's cost drivers and the energy index
+  index data as a whole (not of the series); the most favourable such window of the part's own
+  cost drivers. Live check post-winners: the energy index (PPI-D351) on parts it does not drive and
+  a window ending 2025-09 (data to 2026-09) came back 'irrelevant'; driver windows ending 2025-10
+  were verified
 - quote / offer: only another supplier's live offer in this session (RFQ), and only when cheaper
 - doc + ctr: the notice the supplier's letter gives against the contract's notice
 - fc: the recorded forecast change; sc: on-time % (quality cases: ppm); cost: the full-cost estimate
 - po: 2-8 order lines of the same part
 Each ID counts once per case, so a claim whose IDs were cited already is skipped.
+Figures carry no thousands separator: the arena read "2,376 ppm" as 2.376 -> 'contradicted' (live
+full run, P11: the supplier added EUR 3.00 for the lost trust; EHL sellm lost H07 the same way).
 """
 
 import logging
@@ -26,9 +31,8 @@ from .package import Package, PackageError
 
 log = logging.getLogger("hollerau.claims")
 
-ENERGY_SERIES = "PPI-D351"  # electricity producer prices: verified for every part in the EHL final
 MAX_WINDOW_MONTHS = 12
-RECENT_MONTHS = 11  # window end at most this many months before the series' last month
+RECENT_MONTHS = 11  # window end at most this many months before the newest month of all index data
 MIN_INDEX_FALL_PCT = 1.0  # a smaller fall is not worth a round ("a drop in the bucket")
 OTD_WEAK_PCT = 95.0
 PO_LINES = 3
@@ -59,12 +63,19 @@ def _num(v: JSONValue | None) -> float | None:
     return float(v) if isinstance(v, int | float) and not isinstance(v, bool) else None
 
 
-def best_index_window(pkg: Package, series_id: str) -> tuple[float, str, str] | None:
+def data_last_month(pkg: Package) -> str | None:
+    """The newest month of the index data as a whole - 'the data' the arena's recency rule means."""
+    rows = pkg._query("SELECT MAX(month) AS m FROM index_values")
+    value = rows[0]["m"] if rows else None
+    return value if isinstance(value, str) else None
+
+
+def best_index_window(pkg: Package, series_id: str, data_last: str | None = None) -> tuple[float, str, str] | None:
     """(change %, earlier id, later id) of the most negative valid window of one series."""
     values = [v for v in pkg.index_values(series_id) if v["value"]]
     if len(values) < 2:
         return None
-    last = _months(values[-1]["month"])
+    last = _months(data_last or values[-1]["month"])
     best: tuple[float, str, str] | None = None
     for j, b in enumerate(values):
         if _months(b["month"]) < last - RECENT_MONTHS:
@@ -80,12 +91,11 @@ def best_index_window(pkg: Package, series_id: str) -> tuple[float, str, str] | 
 
 
 def _index_claims(pkg: Package, case: JSONObject, part_id: str) -> list[Claim]:
-    series = [d["series_id"] for d in pkg.cost_drivers(part_id)]
-    if ENERGY_SERIES not in series:
-        series.append(ENERGY_SERIES)
+    series = [d["series_id"] for d in pkg.cost_drivers(part_id)]  # only the part's drivers are relevant
+    data_last = data_last_month(pkg)
     found: list[tuple[float, Claim]] = []
     for sid in series:
-        got = best_index_window(pkg, sid)
+        got = best_index_window(pkg, sid, data_last)
         if got is None:
             continue
         change, a, b = got
@@ -129,7 +139,7 @@ def _should_cost_claim(pkg: Package, part_id: str, supplier_id: str) -> Claim | 
     if sc is None or sc["unit_cost"] is None:
         return None
     sentence = (
-        f"Our bottom-up estimate of the full cost is EUR {sc['unit_cost']:,.2f} per unit before margin ({sc['id']})."
+        f"Our bottom-up estimate of the full cost is EUR {sc['unit_cost']:.2f} per unit before margin ({sc['id']})."
     )
     return {"kind": "should_cost", "sentence": sentence, "refs": [sc["id"]], "price": float(sc["unit_cost"])}
 
@@ -142,7 +152,7 @@ def _volume_claim(pkg: Package, case: JSONObject, part_id: str) -> Claim | None:
     if not isinstance(ref, str) or change is None or change <= 0:
         return None  # a falling forecast argues for the supplier
     sentence = (
-        f"Our forecast {ref} expects {vol:,.0f} units a year, a change of {change:+.1f} %."
+        f"Our forecast {ref} expects {vol:.0f} units a year, a change of {change:+.1f} %."
         if vol
         else f"Our forecast {ref} shows a change of {change:+.1f} %."
     )
@@ -158,7 +168,7 @@ def _scorecard_claim(pkg: Package, case: JSONObject, supplier_id: str, quality: 
         ppm = _num(fact.get("ppm"))
         if not ppm:
             return None
-        sentence = f"Your rolling twelve-month defect rate in {card['quarter']} was {ppm:,.0f} ppm ({card['id']})."
+        sentence = f"Your rolling twelve-month defect rate in {card['quarter']} was {ppm:.0f} ppm ({card['id']})."
         return {"kind": "quality", "sentence": sentence, "refs": [card["id"]], "price": None}
     otd = _num(fact.get("otd_pct"))
     if otd is None or otd >= OTD_WEAK_PCT:
@@ -177,7 +187,7 @@ def _history_claim(pkg: Package, part_id: str, supplier_id: str) -> Claim | None
         return None
     ids = [str(r["id"]) for r in rows]
     shown = sorted({p for p in prices if p is not None})
-    figures = f"EUR {shown[0]:,.2f}" if len(shown) == 1 else ", ".join(f"EUR {p:,.2f}" for p in shown)
+    figures = f"EUR {shown[0]:.2f}" if len(shown) == 1 else ", ".join(f"EUR {p:.2f}" for p in shown)
     sentence = f"Our last {len(rows)} orders for this part were at {figures} ({', '.join(ids)})."
     return {"kind": "history", "sentence": sentence, "refs": ids, "price": max(p for p in prices if p is not None)}
 
@@ -216,7 +226,7 @@ def build_claims(pkg: Package | None, case: JSONObject, supplier_id: str) -> lis
 
 def rival_offer_claim(sheet_id: str, price: float) -> Claim:
     """An RFQ rival's live offer - citable to every other bidder, once per supplier."""
-    sentence = f"Another bidder in this tender currently offers EUR {price:,.2f} per unit ({sheet_id})."
+    sentence = f"Another bidder in this tender currently offers EUR {price:.2f} per unit ({sheet_id})."
     return {"kind": "rival_offer", "sentence": sentence, "refs": [sheet_id], "price": price}
 
 
