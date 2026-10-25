@@ -43,6 +43,21 @@ type AgentFactory = Callable[[Deadline], object]
 CLOSING_LABEL: tuple[str, DecisionSource] = ("Kit time-cap closing move (arena_kit.play.closing_move)", "closing")
 
 
+def _finish_from_arena(client: ArenaClient, table: RecordingTable, case_id: str) -> None:
+    """A case that crashed mid-play still gets its outcome stored once the arena has ended it, so
+    the dashboard never shows it 'active' forever (practice run 1: P05/P10 thread timeouts)."""
+    session_id = getattr(table, "session_id", None)
+    if not session_id:
+        return
+    try:
+        state = cast(JSONObject, client.session(session_id))  # type: ignore[no-untyped-call]
+        result = state.get("result")
+        if isinstance(result, dict) and result.get("ended"):
+            table.finish(result)
+    except Exception as e:  # best effort: the crash itself is already logged
+        log.error("%s: outcome after the crash not stored: %s", case_id, e)
+
+
 def play_one(
     client: ArenaClient,
     db: SupabaseDB,
@@ -59,6 +74,7 @@ def play_one(
         result = cast(JSONObject, play(table, case_id, new_agent(deadline), deadline))  # type: ignore[no-untyped-call]
     except Exception as e:  # one broken case must not stop the others
         log.exception("%s failed", case_id)
+        _finish_from_arena(client, table, case_id)
         return e
     try:
         table.finish(result)
