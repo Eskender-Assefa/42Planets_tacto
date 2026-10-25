@@ -168,6 +168,16 @@ def build_brief(pkg: Package, supplier_id: str, part_id: str | None, asked_pct: 
                     "favourable": False,  # the model judges relevance from the headline
                 }
             )
+        for r in pkg.release_rows(supplier_id)[:4]:  # Sunday release: final cases may cite it
+            title = r.get("headline") or r.get("subject") or r.get("topic") or r.get("table", "release item")
+            items.append(
+                {
+                    "kind": "release",
+                    "sentence": f"{r.get('date', '')}: {title} ({r['id']}).",
+                    "refs": [r["id"]],
+                    "favourable": False,  # the model judges relevance from the headline
+                }
+            )
     except PackageError as e:
         log.warning("brief for %s incomplete: %s", supplier_id, e)
 

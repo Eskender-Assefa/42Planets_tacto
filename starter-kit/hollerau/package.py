@@ -4,6 +4,7 @@ Every row is checked against its TypedDict's columns before it is returned, so a
 (e.g. the Sunday release) fails loudly here instead of leaking wrong shapes into the runner.
 """
 
+import csv
 import logging
 import os
 import threading
@@ -153,6 +154,24 @@ class Package:
         rows = self._query("SELECT MAX(quote_date) AS d FROM quotes")
         value = rows[0]["d"] if rows else None
         return value if isinstance(value, str) else None
+
+    def release_rows(self, supplier_id: str) -> list[dict[str, str]]:
+        """Rows of the Sunday release (data/release-sunday/data/*.csv: new news, letters, a memo)
+        that name this supplier - the kit indexes them for lookups but not as SQL tables.
+        Empty until `uv run arena data` has unpacked the release."""
+        release = getattr(self.data, "release", None)
+        if release is None:
+            return []
+        rows: list[dict[str, str]] = []
+        for path in sorted(Path(release).glob("data/*.csv")):
+            try:
+                with path.open(encoding="utf-8", newline="") as f:
+                    for row in csv.DictReader(f):
+                        if row.get("supplier_id") == supplier_id and row.get("id"):
+                            rows.append({**row, "table": path.stem})
+            except (OSError, csv.Error) as e:
+                log.warning("release file %s unreadable: %s", path, e)
+        return sorted(rows, key=lambda r: r.get("date") or "", reverse=True)
 
     def news(self, supplier_id: str) -> list[NewsItem]:
         rows = self._query("SELECT * FROM news WHERE supplier_id = ? ORDER BY date DESC", (supplier_id,))
