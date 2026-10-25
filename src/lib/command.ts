@@ -140,3 +140,21 @@ export function useWaveScores() {
     },
   });
 }
+
+/** One batched read for listed sessions, not one query per case. */
+export function useListedAuditLogs(sessionIds: string[]) {
+  const ids = [...sessionIds].sort();
+  return useQuery({
+    queryKey: ["hollerau", "listed-audit", ids],
+    enabled: ids.length > 0,
+    queryFn: async (): Promise<AuditLog[]> => {
+      const rows: AuditLog[] = [];
+      for (let offset = 0; ; offset += 1000) {
+        const { data, error } = await hollerau.from("audit_logs").select("*").in("session_id", ids).order("id").range(offset, offset + 999);
+        if (error) throw error;
+        rows.push(...data);
+        if (data.length < 1000) return rows;
+      }
+    },
+  });
+}
