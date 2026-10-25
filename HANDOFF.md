@@ -3,6 +3,15 @@
 State on 2026-10-25 (Sunday). Code freeze **13:00** - submit the final commit hash.
 
 ## Current candidate
+- `post-pacing`: post-winners-fix + concession path (move every round in shrinking C steps, never
+  retract, keep matched terms; config `concession_path`), reciprocity (no forced step after a supplier
+  did not move), swap guard (a forced swap may not concede past the guard; P11 had jumped
+  43.90 -> 48.99). Live: P07/P08/P10/P11/P18 2.994 vs 2.908 (new bests P07 .728, P18 .685, P10 .686;
+  leaderboard 75.5, rank 11); P11 .314, P08 .614-.635 after reciprocity + swap guard.
+  Quarantine switches (`rule_accept`, `mindset_inference`) all ON - final offers must be accepted
+  (silenced: 4 of 5 suppliers walked).
+- Open (presentation, 08:30): final uses NEW suppliers (claims break for unknown suppliers - fix
+  pending); Sunday market data not yet downloaded (`uv run arena data`).
 - `post-winners-fix` is the final candidate: `post-winners` (claims.py + owner payment + capacity
   lead time; see docs/winners_analysis) plus two claim fixes learned live - index claims only from
   the part's cost drivers, recency counted from the newest month of all index data (energy index

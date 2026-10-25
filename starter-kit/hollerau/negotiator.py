@@ -15,6 +15,7 @@ mathematical_justification is written here from the engine's numbers.
 
 import json
 import logging
+import math
 import os
 import re
 import time
@@ -29,7 +30,16 @@ from arena_kit.agents.llm import ID_RE, LLMAgent
 from . import swaps as swap_engine
 from .claims import Claim, build_claims, rival_offer_claim
 from .claims import favourable as claim_favourable
-from .envelope import Envelope, ThreadEnvelope, coverage, envelope, owner_run, safe_cost
+from .envelope import (
+    Envelope,
+    ThreadEnvelope,
+    coverage,
+    envelope,
+    owner_run,
+    price_for_cost,
+    safe_cost,
+    supplier_sheets,
+)
 from .evidence import Brief, build_brief
 from .kit import (
     JSONObject,
@@ -303,6 +313,7 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         neglected = self._neglected_thread(threads, live)
         if neglected is not None and neglected != env["best_supplier"] and len(live) > 1:
             held = self._fallback(case, threads, env, tel, neglected, "Thread close to the 60 s limit.")
+            self._pace(case, held, env, threads)
             self._attach_claim(held, env)
             self._remember_citations(held)
             return held
@@ -322,6 +333,7 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         if checked is None:
             checked, news_id = self._fallback(case, threads, env, tel), None
         self._note_swap(checked)
+        self._pace(case, checked, env, threads)
         self._attach_claim(checked, env, news_id)
         self._ask_for_options(checked, threads, tel)
         self._remember_citations(checked)
@@ -393,6 +405,94 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         if any(marker in body.lower() for marker in cfg["markers"]):
             return  # Claude already asked in its own words
         msg["body"] = self._insert_before_closing(body, cfg["question"])
+
+    # -- concession path: move every round, never back (config concession_path) ------------------
+
+    @staticmethod
+    def _previous_counter(events: list[Message]) -> JSONObject | None:
+        """Terms of our last counter-sheet in this thread (the first sheet of our last offer)."""
+        for m in reversed(events):
+            sheets = m.get("term_sheets")
+            if m.get("from") == "buyer" and isinstance(sheets, list) and sheets:
+                first = sheets[0]
+                terms = first.get("terms") if isinstance(first, dict) else None
+                if isinstance(terms, dict):
+                    return terms
+        return None
+
+    def _min_counter_c(
+        self, case: JSONObject, events: list[Message], te: ThreadEnvelope
+    ) -> tuple[float, JSONObject] | None:
+        """(the least C our next counter may cost us, our previous counter's terms): our previous C
+        plus a shrinking share of the gap to the supplier's standing sheet - in C, so any package
+        shape compares. None before our first counter or without a gap."""
+        cfg = config()["concession_path"]
+        prev = self._previous_counter(events)
+        standing = te["c_standing"]
+        if not cfg["enabled"] or prev is None or standing is None:
+            return None
+        c_prev = safe_cost(case, prev, te["standard"])
+        if not math.isfinite(c_prev):
+            return None
+        n = sum(m.get("from") == "buyer" for m in events) + 1
+        share = next((s for lim, s in cfg["shares"] if n <= lim), cfg["shares"][-1][1])
+        # reciprocity: a supplier that did not move gets no move from us - hold, never retract
+        # (live P11: Kalwisz sat at 48.00 for five rounds while the path walked us 45.18 -> 47.18)
+        theirs = [safe_cost(case, t, te["standard"]) for _, t in supplier_sheets(events)]
+        if len(theirs) >= 2 and theirs[-1] > theirs[-2] - cfg["moved_min_pct"] / 100 * abs(theirs[-2]):
+            share = 0.0
+        return c_prev + max(standing - c_prev, 0.0) * share, prev
+
+    def _pace(self, case: JSONObject, d: JSONObject, env: Envelope, threads: Threads) -> None:
+        """Arena rule: 'no concession without a move from you'. Every counter concedes at least the
+        path's share (raise its price just enough), never asks more than our previous counter, and
+        keeps a term we already matched with the supplier (P18: 5.06 -> 4.88 and a deadband taken
+        back -> it walked). Only ever raises our price, never above the supplier's own sheet."""
+        sid = str(d.get("supplier_id"))
+        msg = d.get("message")
+        te = env["threads"].get(sid)
+        if te is None or not isinstance(msg, dict) or msg.get("action") or not msg.get("term_sheets"):
+            return
+        events = threads.get(sid, [])
+        got = self._min_counter_c(case, events, te)
+        if got is None or te["c_standing"] is None:
+            return
+        floor, prev = got
+        cap = te["c_standing"] - 0.01  # a sheet as dear as theirs is no counter
+        std, standing = te["standard"], te["standing_terms"]
+        neg = case.get("negotiable")
+        fields = [str(f) for f in neg if f != "unit_price"] if isinstance(neg, list) else []
+        changed: list[tuple[float, float]] = []
+        for s in msg["term_sheets"]:  # type: ignore[union-attr]
+            terms = s.get("terms") if isinstance(s, dict) else None
+            if not isinstance(terms, dict):
+                continue
+            for f in fields:  # a term we already matched with the supplier stays matched
+                if f in prev and prev.get(f) == standing.get(f) and terms.get(f) != prev.get(f):
+                    terms[f] = prev[f]
+            old = _num(terms.get("unit_price"))
+            if old is None or safe_cost(case, terms, std) >= floor:
+                continue
+            need = min(floor, cap)
+            new = price_for_cost(case, terms, need, std)
+            if new is not None and safe_cost(case, {**terms, "unit_price": new}, std) < need:
+                new = round(new + 0.01, 2)  # the search rounds to the nearest cent: round up instead
+            if new is not None and new > old:
+                terms["unit_price"] = new
+                changed.append((old, new))
+        if not changed:
+            return
+        body = msg.get("body")
+        if isinstance(body, str):
+            for old, new in changed:  # keep the e-mail's figures equal to the binding sheets
+                body = body.replace(f"{old:,.2f}", f"{new:,.2f}").replace(f"{old:.2f}", f"{new:.2f}")
+            msg["body"] = body
+        audit = msg.get("reasoning_audit")
+        if isinstance(audit, dict) and isinstance(audit.get("mathematical_justification"), str):
+            moves = ", ".join(f"{a:.2f}->{b:.2f}" for a, b in changed)
+            audit["mathematical_justification"] = (
+                str(audit["mathematical_justification"]) + f" | paced to min C {_eur(floor)}: {moves}"
+            )
 
     # -- checked claims, one per offer (claims.py) ------------------------------------------------
 
@@ -711,6 +811,27 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
             ]
             if owner_run(threads[sid]):
                 out.append("OWNER-RUN supplier: it values fast payment - keep the TARGET's short payment term.")
+            paced = self._min_counter_c(case, threads[sid], te)
+            if paced is not None and te["target_terms"] is not None and te["c_standing"] is not None:
+                floor, prev = paced
+                at_target = price_for_cost(
+                    case, te["target_terms"], min(floor, te["c_standing"] - 0.01), te["standard"]
+                )
+                held = floor <= safe_cost(case, prev, te["standard"]) + 0.01
+                out.append(
+                    (
+                        "PACING: the supplier did not move since our last counter - hold: repeat or barely move our "
+                        f"previous counter {json.dumps(prev)}, argue with the new evidence, never go below it; "
+                        "keep terms we already matched with the supplier."
+                    )
+                    if held
+                    else (
+                        "PACING (suppliers do not concede without a move from us): your counter must cost us at "
+                        f"least C {_eur(floor)} - at the TARGET's terms a unit price of at least {_eur(at_target)}; "
+                        f"never below our previous counter {json.dumps(prev)}; keep terms we already matched with "
+                        "the supplier."
+                    )
+                )
             brief = self.state["briefs"].get(sid)
             if config()["claims"]["enabled"]:
                 nxt = self._next_claim(sid, env)
@@ -806,7 +927,14 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
             asked = swap_engine.wants(events, cfg, last_n=1) & {s["field"] for s in found}
             read = config()["mindset_inference"]["enabled"]  # quarantine: no stall-triggered trades
             if (read and swap_engine.stalled(tel[sid]["concession_velocity"], sent, cfg)) or (sent >= 1 and asked):
-                self.mandatory[sid] = next((s for s in found if s["field"] in asked), found[0])
+                must = next((s for s in found if s["field"] in asked), found[0])
+                # a forced trade obeys the concession guard too (live P11: a swap priced off the
+                # supplier's 50.00 jumped our counter 43.90 -> 48.99, accepted at once: 0.15)
+                cap = self._counter_cap(case, events, te, tel[sid], env["progress"])
+                if cap is None or must["c_true"] <= cap:
+                    self.mandatory[sid] = must
+                else:
+                    log.info("swap %s=%s not forced: concedes past the guard", must["field"], must["value"])
 
     @staticmethod
     def _has_sheet(sheets: list[JSONValue], terms: JSONObject) -> bool:
@@ -920,7 +1048,7 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
                 c = safe_cost(case, terms, te["standard"], te["supplier_estimate"])
                 if te["c_true_standing"] is None or c < te["c_true_standing"]:
                     kept.append({**cast(JSONObject, s), "terms": terms})
-            allowance = self._concession_allowance(te, t, env["progress"])
+            allowance = self._counter_cap(case, threads.get(sid, []), te, t, env["progress"])
             if allowance is not None and kept:
                 within: list[JSONValue] = []
                 for x in kept:
@@ -993,6 +1121,18 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
                 return None
         sid = next(iter(env["threads"]))
         return {"supplier_id": sid, "message": {"action": {"type": "walk_away"}}}
+
+    def _counter_cap(
+        self, case: JSONObject, events: list[Message], te: ThreadEnvelope, t: Telemetry, progress: float
+    ) -> float | None:
+        """The dearest C any counter-sheet may have now: the concession guard, widened so it never
+        forbids the concession path (Claude may concede up to twice the path's minimum step)."""
+        allowance = self._concession_allowance(te, t, progress)
+        paced = self._min_counter_c(case, events, te)
+        if allowance is not None and paced is not None:
+            c_prev = safe_cost(case, paced[1], te["standard"])
+            allowance = max(allowance, paced[0] + (paced[0] - c_prev))
+        return allowance
 
     @staticmethod
     def _concession_allowance(te: ThreadEnvelope, t: Telemetry, progress: float) -> float | None:

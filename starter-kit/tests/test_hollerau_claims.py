@@ -192,3 +192,75 @@ def test_capacity_case_never_asks_a_shorter_lead_time(world):
     for goal in ("routine", "leverage"):
         env = envelope(case, {sup: events}, [sup], {sup: protocol(goal, "DE")}, pkg, {sup: "DE"})
         assert env["threads"][sup]["target_terms"]["lead_time_days"] >= theirs, goal
+
+
+def _p07(world, monkeypatch, claude_price):
+    """P07 as recorded: Leitner 5.74 -> our 5.40 (90 d, 24 m) -> Leitner 5.61 (90 d, 24 m). The
+    recorded agent then offered 5.30 - a retraction - and got a final offer."""
+    from hollerau.profiles import config
+
+    monkeypatch.setitem(config()["swaps"], "enabled", False)
+    cases, pkg = world
+    case, sup = cases["case:P07"], "sup:70610"
+    events = _threads("P07")[sup][:3]
+    reply = _reply(
+        sup,
+        f"We propose EUR {claude_price:.2f} per kit.",
+        claude_price,
+        {"payment_days": "90", "contract_months": "24"},
+    )
+    agent = HollerauAgent(StandIn(reply), pkg)
+    return agent, case, sup, events, agent.decide(case, {sup: events})
+
+
+def test_concession_path_never_retracts_and_moves_every_round(world, monkeypatch):
+    """Arena rule 'no concession without a move from you': the 5.30 retraction becomes a counter
+    above our previous 5.40 by at least the path's share of the C gap, below Leitner's 5.61, and
+    the e-mail quotes the binding price."""
+    from hollerau.envelope import safe_cost
+
+    agent, case, sup, events, d = _p07(world, monkeypatch, 5.30)
+    terms = d["message"]["term_sheets"][0]["terms"]
+    assert 5.40 < terms["unit_price"] < 5.61, terms
+    assert terms["payment_days"] == 90 and terms["contract_months"] == 24  # matched terms stay
+    assert f"{terms['unit_price']:.2f}" in d["message"]["body"] and "5.30" not in d["message"]["body"]
+    from hollerau.envelope import envelope
+
+    te = envelope(case, {sup: events}, [sup], agent.state["protocols"], agent.pkg, agent.state["countries"])["threads"][
+        sup
+    ]
+    floor, _ = agent._min_counter_c(case, events, te)
+    assert safe_cost(case, terms, te["standard"]) >= floor - 0.5
+    assert "paced to min C" in d["message"]["reasoning_audit"]["mathematical_justification"]
+
+
+def test_concession_path_leaves_a_big_enough_step_alone(world, monkeypatch):
+    """Claude's own step between the path's minimum and twice it goes out as written; a bigger one
+    is still stopped by the concession guard."""
+    agent, case, sup, events, d = _p07(world, monkeypatch, 5.48)
+    assert d["message"]["term_sheets"][0]["terms"]["unit_price"] == 5.48
+    audit = d["message"]["reasoning_audit"]
+    assert audit["decision_source"] == "claude" and "paced" not in audit["mathematical_justification"]
+    *_, d2 = _p07(world, monkeypatch, 5.58)
+    assert d2["message"]["term_sheets"][0]["terms"]["unit_price"] < 5.58
+
+
+def test_concession_path_holds_against_a_stonewall(world):
+    """Reciprocity (live P11: Kalwisz 48.00 five times while we climbed 45.18 -> 47.18): when the
+    supplier's last sheet did not get cheaper, the minimum step is our previous counter - hold."""
+    from hollerau.envelope import envelope, safe_cost
+
+    cases, pkg = world
+    case, sup = cases["case:P07"], "sup:70610"
+    events = _threads("P07")[sup][:3]
+    stall = {**events[2], "message_id": "msg:70610-2-9", "status": "open"}  # same sheet again
+    ours = {
+        "from": "buyer",
+        "term_sheets": [{"terms": {"unit_price": 5.45, "payment_days": 90, "contract_months": 24}}],
+    }
+    thread = [*events, ours, stall]
+    agent = HollerauAgent(StandIn(_reply(sup, "x", 5.45, {})), pkg)
+    agent.state = agent._prepare_case(case)
+    te = envelope(case, {sup: thread}, [sup], agent.state["protocols"], pkg, agent.state["countries"])["threads"][sup]
+    floor, prev = agent._min_counter_c(case, thread, te)
+    assert abs(floor - safe_cost(case, prev, te["standard"])) < 0.01

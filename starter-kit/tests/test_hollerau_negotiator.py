@@ -80,7 +80,10 @@ def test_schema_is_strict_and_uses_option_labels(p02):
     assert kwargs["system"][1]["cache_control"] == {"type": "ephemeral"}  # the per-case brief is cached
 
 
-def test_claude_send_is_mapped_priced_and_audited(p02, no_swaps):
+def test_claude_send_is_mapped_priced_and_audited(p02, no_swaps, monkeypatch):
+    from hollerau.profiles import config
+
+    monkeypatch.setitem(config()["concession_path"], "enabled", False)  # mapping only: see the pacing tests
     case, threads, pkg = p02
     d = HollerauAgent(StandInClient(_reply(price=360.0, payment="90")), pkg).decide(case, threads)
     msg = d["message"]

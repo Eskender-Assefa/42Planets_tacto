@@ -131,6 +131,12 @@ class RuleAcceptConfig(TypedDict):
     on_final_offer: bool  # ... when it declared its final offer (cheapest live)
 
 
+class ConcessionPathConfig(TypedDict):
+    enabled: bool
+    shares: list[list[float]]  # [[our message number up to, minimum share of the C gap], ...]
+    moved_min_pct: float  # the supplier counts as having moved when its C fell by more than this %
+
+
 class MindsetConfig(TypedDict):
     enabled: bool  # false: no inferred supplier mindset anywhere (quarantine)
 
@@ -153,6 +159,7 @@ class StrategyConfig(TypedDict):
     owner_payment: OwnerPaymentConfig
     capacity_respect: CapacityRespectConfig
     rule_accept: RuleAcceptConfig
+    concession_path: ConcessionPathConfig
     mindset_inference: MindsetConfig
     lever_friction_pct: float  # % of price per changed non-price term: suppliers price our demands back in
     friction_fields: list[str]  # the terms friction applies to (not coverage / quality)
