@@ -26,4 +26,27 @@ describe("Speech playback", () => {
     act(() => { result.current.enqueue("Live one.", now); result.current.enqueue("Live two.", now); result.current.enqueue("Old.", new Date(Date.now() - 61000).toISOString()); });
     expect(spoken).toHaveLength(2); act(() => spoken[1]?.onend()); expect(spoken).toHaveLength(3); act(() => spoken[2]?.onend()); expect(spoken).toHaveLength(3);
   });
+  it("leaves speech unsupported when the browser has no engine", () => {
+    vi.stubGlobal("speechSynthesis", undefined);
+    const { result } = renderHook(() => useSpeech(["Transcript."]));
+    expect(result.current.supported).toBe(false);
+    act(() => result.current.play()); expect(result.current.status).toBe("idle");
+  });
+  it("cancels when the script changes and ignores canceled callbacks", () => {
+    const { spoken, speech } = engine();
+    const { result, rerender } = renderHook(({ text }) => useSpeech([text]), { initialProps: { text: "Old session." } });
+    act(() => result.current.play()); const before = speech.cancel.mock.calls.length;
+    rerender({ text: "New session." }); expect(speech.cancel.mock.calls.length).toBeGreaterThan(before);
+    act(() => spoken[0]?.onend()); expect(spoken).toHaveLength(1); expect(result.current.status).toBe("idle");
+  });
+  it("prefers natural English voices and remembers the selected voice", () => {
+    const { speech } = engine();
+    const available = [{ voiceURI: "plain", name: "English", lang: "en-GB" }, { voiceURI: "natural", name: "Natural English", lang: "en-US" }];
+    speech.getVoices = () => available as unknown as ReturnType<typeof speech.getVoices>;
+    localStorage.removeItem("hollerau-voice");
+    const { result } = renderHook(() => useSpeech(["Sentence."]));
+    expect(result.current.voiceId).toBe("natural");
+    act(() => result.current.chooseVoice("plain")); expect(localStorage.getItem("hollerau-voice")).toBe("plain");
+    localStorage.removeItem("hollerau-voice");
+  });
 });
