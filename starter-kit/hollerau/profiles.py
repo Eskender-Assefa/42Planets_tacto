@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TypedDict, cast
 
 CONFIG = Path(__file__).parent / "config" / "strategy.json"
+CALIBRATION = Path(__file__).parent / "config" / "calibration.json"
 DEFAULT_SEGMENT = "routine"
 DEFAULT_CULTURE = "_default"
 
@@ -77,6 +78,19 @@ class PacingConfig(TypedDict):
     hold_until_progress: float
 
 
+class FloorPacingConfig(TypedDict):
+    enabled: bool
+    steps: list[list[float]]  # [[our message number up to, share of the envelope], ...]
+
+
+class GoalFit(TypedDict):
+    floor_ratio: float  # real floor price / opening price - 1, fitted on revealed c_best
+    n: int
+    min: float
+    max: float
+    cases: list[str]
+
+
 class StrategyConfig(TypedDict):
     segments: dict[str, SegmentConfig]
     cultures: dict[str, CultureConfig]
@@ -87,6 +101,7 @@ class StrategyConfig(TypedDict):
     leverage: LeverageConfig
     swaps: SwapsConfig
     pacing: PacingConfig
+    floor_pacing: FloorPacingConfig
     llm: LLMConfig
 
 
@@ -104,6 +119,14 @@ def config() -> StrategyConfig:
     if missing:
         raise ValueError(f"{CONFIG} misses {sorted(missing)}")
     return cast(StrategyConfig, raw)
+
+
+@cache
+def calibration() -> dict[str, GoalFit]:
+    """Floor ratios per category_goal fitted by `python -m hollerau.calibrate` ({} if not fitted)."""
+    if not CALIBRATION.exists():
+        return {}
+    return cast(dict[str, GoalFit], json.loads(CALIBRATION.read_text(encoding="utf-8")))
 
 
 def protocol(category_goal: str | None, country: str | None) -> Protocol:

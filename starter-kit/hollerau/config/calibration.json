@@ -1,0 +1,52 @@
+{
+  "leverage": {
+    "floor_ratio": -0.2246,
+    "n": 3,
+    "min": -0.2942,
+    "max": -0.1549,
+    "cases": [
+      "case:P05",
+      "case:P08",
+      "case:P18"
+    ]
+  },
+  "quality_first": {
+    "floor_ratio": -0.066,
+    "n": 1,
+    "min": -0.066,
+    "max": -0.066,
+    "cases": [
+      "case:P11"
+    ]
+  },
+  "routine": {
+    "floor_ratio": -0.0678,
+    "n": 2,
+    "min": -0.1254,
+    "max": -0.0101,
+    "cases": [
+      "case:P04",
+      "case:P07"
+    ]
+  },
+  "secure_supply": {
+    "floor_ratio": -0.1273,
+    "n": 1,
+    "min": -0.1273,
+    "max": -0.1273,
+    "cases": [
+      "case:P10"
+    ]
+  },
+  "stabilise": {
+    "floor_ratio": -0.0101,
+    "n": 3,
+    "min": -0.0201,
+    "max": -0.0025,
+    "cases": [
+      "case:P01",
+      "case:P02",
+      "case:P03"
+    ]
+  }
+}

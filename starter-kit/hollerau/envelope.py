@@ -32,7 +32,7 @@ from .kit import (
     total_cost,
 )
 from .package import Package, PackageError
-from .profiles import Protocol, config
+from .profiles import Protocol, calibration, config
 
 log = logging.getLogger("hollerau.envelope")
 
@@ -80,6 +80,7 @@ class ThreadEnvelope(TypedDict):
     coverage_pct: float | None  # the standing sheet's coverage of our need over the horizon
     uncovered_eur: float | None
     target_coverage_pct: float | None
+    floor_ratio: float | None  # calibrated floor vs. the supplier's opening (None: other estimate)
 
 
 class Envelope(TypedDict):
@@ -368,6 +369,33 @@ def _leverage_target(
     return ask, terms, c
 
 
+def _floor_paced_target(
+    case: JSONObject,
+    base: JSONObject,
+    price: float,
+    floor: float,
+    std: JSONObject,
+    events: list[Message],
+    opening: JSONObject,
+    p: float,
+) -> tuple[float, JSONObject, float]:
+    """leverage_fix.txt: anchor at the estimated C_best, then concede a share of the envelope
+    (C_open - C_best_est) per step of our messages - in cost terms, converted to a price by the
+    cost engine; never above the supplier's standing price. Near the wave cap: the last step."""
+    steps = config()["floor_pacing"]["steps"]
+    n = sum(m.get("from") == "buyer" for m in events) + 1
+    share = steps[-1][1] if p >= 1.0 else next((s for lim, s in steps if n <= lim), steps[-1][1])
+    floor_terms, c_best_est = best_package(case, base, floor, std, None)
+    c_open_t = safe_cost(case, opening, std)
+    if not (math.isfinite(c_best_est) and math.isfinite(c_open_t)) or c_open_t <= c_best_est:
+        return price, base, safe_cost(case, base, std)
+    target_c = c_best_est + (c_open_t - c_best_est) * share
+    ask = price_for_cost(case, floor_terms, target_c, std) or floor
+    ask = round(min(ask, price), 2)
+    terms, c = best_package(case, base, ask, std, None)
+    return ask, terms, c
+
+
 def thread_envelope(
     case: JSONObject,
     supplier_id: str,
@@ -425,6 +453,17 @@ def thread_envelope(
             floor = est["full_cost"] * (1 + seg.get("min_margin_pct", 3.0) / 100)
         floor = round(floor, 2)
 
+    # leverage_fix.txt: outside relationship cases, the floor estimate comes from the calibration
+    # fitted on every arena-revealed c_best (python -m hollerau.calibrate) - should-cost floors
+    # missed badly there (P05: 34.18 estimated vs 26.62 real).
+    fitted = None if relationship else calibration().get(proto["goal"])
+    opening_price = _num(sheets[0].get("unit_price")) if sheets else None
+    floor_ratio: float | None = None
+    if fitted is not None and opening_price is not None:
+        floor_ratio = fitted["floor_ratio"]
+        floor = round(opening_price * (1 + floor_ratio), 2)
+    floor_paced = bool(floor_ratio is not None and config()["floor_pacing"]["enabled"])
+
     target_price: float | None = None
     target_terms: JSONObject | None = None
     c_target: float | None = None
@@ -433,6 +472,8 @@ def thread_envelope(
         base = complete_offer(case, terms)
         if relationship and est is not None:
             target_price, target_terms, ct = _relationship_target(case, base, price, floor, std, est, p, proto, aggr)
+        elif floor_paced and floor is not None and sheets:
+            target_price, target_terms, ct = _floor_paced_target(case, base, price, floor, std, events, sheets[0], p)
         else:
             target_price, target_terms, ct = _leverage_target(case, base, price, floor, std, p, proto, aggr, soften)
         cap = proto["segment"].get("max_discount_from_offer_pct")
@@ -467,6 +508,7 @@ def thread_envelope(
         "coverage_pct": cov_s,
         "uncovered_eur": unc_s,
         "target_coverage_pct": coverage(case, target_terms, std)[0] if target_terms else None,
+        "floor_ratio": floor_ratio,
     }
 
 

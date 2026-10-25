@@ -78,7 +78,9 @@ def test_stalled_supplier_gets_the_mandatory_trade_first(ctx):
     assert msg["term_sheets"][0]["terms"]["unit_price"] < events[-1]["term_sheets"][0]["terms"]["unit_price"]
 
 
-def test_pacing_holds_the_anchor_first(ctx):
+def test_pacing_holds_the_anchor_first(ctx, monkeypatch):
+    """v3 hold on the old percentage curve (floor pacing off - leverage_fix replaces it there)."""
+    monkeypatch.setitem(config()["floor_pacing"], "enabled", False)
     cases, pkg = ctx
     case, sup = cases["case:P08"], "sup:70710"
     events = _threads("P08")[sup][:1]
@@ -103,3 +105,23 @@ def test_last_move_accepts_a_standing_sheet_that_beats_everything(ctx):
     tel[sup]["moves_left"] = 1
     rule = agent._rule_accept(case, {sup: events}, env, tel)
     assert rule is not None and rule[0]["message"]["action"]["type"] == "accept"
+
+
+def test_floor_pacing_anchors_at_the_calibrated_floor_then_steps_up(ctx):
+    """leverage_fix.txt: messages 1-3 at the estimated C_best, then +5 % / +15 % of the envelope."""
+    from hollerau.profiles import calibration
+
+    cases, pkg = ctx
+    case, sup = cases["case:P08"], "sup:70710"
+    full = _threads("P08")[sup]
+    ratio = calibration()["leverage"]["floor_ratio"]
+    opening = full[0]["term_sheets"][0]["terms"]["unit_price"]
+
+    def target(k):  # our next message is number (buyer messages in events[:k]) + 1
+        return thread_envelope(case, sup, full[:k], protocol("leverage", "DE"), pkg, "DE", 0.0)
+
+    first = target(1)
+    assert first["floor_ratio"] == ratio and first["price_floor_est"] == round(opening * (1 + ratio), 2)
+    assert first["target_price"] == pytest.approx(first["price_floor_est"], abs=0.02)  # anchor on the floor
+    fourth = target(7)  # 3 buyer messages sent -> message 4: + 5 % of the envelope
+    assert first["target_price"] < fourth["target_price"] <= fourth["standing_price"]

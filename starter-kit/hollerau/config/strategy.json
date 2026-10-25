@@ -22,7 +22,7 @@
       "label": "Bottleneck - Protection Protocol",
       "relationship": true,
       "anchor_below_target_pct": 1.0,
-      "max_discount_from_offer_pct": 5.0,
+      "max_discount_from_offer_pct": 10.0,
       "guidance": "Supply security first: few or no alternatives. Secure volume, lead time and horizon; pay a fair price, keep the supplier healthy, never threaten to walk."
     },
     "quality_first": {
@@ -88,6 +88,11 @@
       "incoterm": ["freight", "transport", "logistics", "delivery terms", "incoterm"],
       "lead_time_days": ["lead time", "lieferzeit", "capacity"]
     }
+  },
+  "floor_pacing": {
+    "_comment": "leverage_fix.txt: non-relationship cases anchor at the calibrated C_best estimate (config/calibration.json, from `python -m hollerau.calibrate`) and concede a share of the envelope (C_open - C_best_est) per step: [our message number up to, share]. enabled=false = previous curve.",
+    "enabled": true,
+    "steps": [[3, 0.0], [6, 0.05], [9, 0.15]]
   },
   "pacing": {
     "_comment": "v3: hold the anchor until this share of the case, then slide to the landing. 0 = old smooth curve.",

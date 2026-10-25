@@ -466,6 +466,11 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
                     else ""
                 )
                 + f"; estimated supplier floor price {te['price_floor_est'] or 'unknown'}"
+                + (
+                    f" (calibrated on revealed results: {te['floor_ratio']:+.1%} vs its opening)"
+                    if te["floor_ratio"] is not None
+                    else ""
+                )
                 + f"; TARGET this round: {json.dumps(te['target_terms'])} -> C {_eur(te['c_target'])}.",
                 "SUPPLIER OFFERS (every sheet of its latest message, our C; only the first can be accepted - "
                 "propose a cheaper alternative back as your term sheet to get it): "
@@ -839,7 +844,8 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
             + (f" (+{_eur(te['penalty_at_offer'])} est. supplier-health charge)" if te["penalty_at_offer"] else ""),
             f"our proposal {_eur(c_ours)}" if c_ours is not None else "no counter-sheet",
             f"target {_eur(te['c_target'])}",
-            f"floor estimate {_eur(te['c_floor_est'])}",
+            f"floor estimate {_eur(te['c_floor_est'])}"
+            + (f" (calibrated {te['floor_ratio']:+.1%})" if te["floor_ratio"] is not None else ""),
             f"alternative {_eur(env['c_alt'])}",
             f"position {env['position']}"
             + (f" (alt {env['leverage_gap_pct']:+.1f}% vs C_open)" if env["leverage_gap_pct"] is not None else ""),
