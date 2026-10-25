@@ -155,3 +155,42 @@ def test_claude_cannot_give_away_the_chargeback_early(ctx):
     sheets = d["message"]["term_sheets"]
     assert d["message"]["reasoning_audit"]["decision_source"] == "fallback"
     assert all(s["terms"]["chargeback_eur_per_complaint"] > 0 for s in sheets)
+
+
+def _p08_reply(body):
+    reply = _reply(price=5.40, payment="90", body=body)
+    reply["decision"]["supplier_id"] = "sup:70710"
+    reply["decision"]["term_sheets"] = [
+        {"unit_price": 5.40, "payment_days": "90", "index_clause": "none", "contract_months": "24"}
+    ]
+    return reply
+
+
+def test_first_offer_asks_what_else_would_help(ctx, monkeypatch):
+    """Ask, never only ask: the first offer carries the question for the supplier's best alternatives."""
+    from hollerau.negotiator import HollerauAgent
+    from hollerau.profiles import config
+
+    monkeypatch.setitem(config()["concession_guard"], "start_share", 1.0)  # isolate the question feature
+    cases, pkg = ctx
+    sup, events = "sup:70710", _threads("P08")["sup:70710"][:1]
+    d = HollerauAgent(StandInClient(_p08_reply("Dear Sir or Madam, here is our offer.")), pkg).decide(
+        cases["case:P08"], {sup: events}
+    )
+    body = d["message"]["body"]
+    assert "alternative packages" in body and "term_sheets" in d["message"]
+    from hollerau.negotiator import SIGNATURE
+
+    assert body.index("alternative packages") < body.index(SIGNATURE)  # before the signature
+
+
+def test_question_not_duplicated_when_claude_asked(ctx, monkeypatch):
+    from hollerau.negotiator import HollerauAgent
+    from hollerau.profiles import config
+
+    monkeypatch.setitem(config()["concession_guard"], "start_share", 1.0)
+    cases, pkg = ctx
+    sup, events = "sup:70710", _threads("P08")["sup:70710"][:1]
+    own = "Here is our offer. Which terms beyond price would help you most?"
+    d = HollerauAgent(StandInClient(_p08_reply(own)), pkg).decide(cases["case:P08"], {sup: events})
+    assert d["message"]["body"].count("?") == 1

@@ -94,6 +94,13 @@
     "enabled": true,
     "steps": [[3, 0.0], [6, 0.05], [9, 0.15]]
   },
+  "ask_options": {
+    "_comment": "With the first offer to each supplier (and again when it stalls), ask which non-price terms would improve its price; answers feed the alternative/swap engines.",
+    "enabled": true,
+    "repeat_after_messages": 2,
+    "markers": ["alternative package", "which terms", "what else", "beyond price", "besides price"],
+    "question": "Beyond price: which terms - payment days, a binding volume commitment, contract length, an index clause or lead time - would let you improve your price most? Please send us your best alternative packages."
+  },
   "concession_guard": {"_comment": "Claude's counter-sheets may concede at most start + span x progress of the gap between our target and the supplier's standing sheet.", "start_share": 0.25, "span_share": 0.5},
   "lever_friction_pct": 1.0,
   "friction_fields": ["lead_time_days", "index_clause", "incoterm", "effective_date", "tooling_eur"],

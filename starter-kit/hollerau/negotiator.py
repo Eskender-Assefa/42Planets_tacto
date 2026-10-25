@@ -102,7 +102,10 @@ Rules:
 13. Trades: never give a lever the supplier wants (payment days, index clause, longer contract,
    volume, freight) without the matching price cut listed in SWAPS - those cuts are computed by our
    cost engine. When SWAPS marks a trade as MANDATORY, your first term sheet must be exactly it.
-14. reasoning_audit: observed_barrier = the resistance or signal you see from the supplier;
+14. Ask, never only ask: in your first e-mail to each supplier (and when it stalls), after your
+   offer, ask which non-price terms - payment days, volume commitment, contract length, index clause,
+   lead time - would let it improve its price most, and invite its best alternative packages.
+15. reasoning_audit: observed_barrier = the resistance or signal you see from the supplier;
    strategic_intent = why this move and package, in one or two sentences, without numbers you did
    not copy."""
 
@@ -154,6 +157,7 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         self.seen: dict[str, float] = {}  # supplier message_id -> when this agent first saw it
         self.shown_attachments: set[str] = set()
         self.alt_proposed: set[tuple[str, str]] = set()  # (supplier, alternative terms) already proposed back
+        self.asked: dict[str, int] = {}  # supplier -> our message number when we last asked for options
         self.swaps: dict[str, list[swap_engine.Swap]] = {}
         self.mandatory: dict[str, swap_engine.Swap] = {}
 
@@ -200,6 +204,7 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         self.seen = {}
         self.shown_attachments = set()
         self.alt_proposed = set()
+        self.asked = {}
         self.swaps, self.mandatory = {}, {}
         return state
 
@@ -285,6 +290,7 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         if checked is None:
             checked = self._fallback(case, threads, env, tel)
         self._note_swap(checked)
+        self._ask_for_options(checked, threads, tel)
         self._remember_citations(checked)
         return checked
 
@@ -330,6 +336,45 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         }
         why = f"Its alternative costs us {_eur(main_c - c)} less than its main sheet."
         return d, (why, "Take the supplier's own cheaper alternative instead of its main sheet.")
+
+    def _ask_for_options(self, d: JSONObject, threads: Threads, tel: dict[str, Telemetry]) -> None:
+        """Ask the supplier what beyond price would let it improve - attached to an offer, never a
+        message of its own (every message costs a round). Answers feed the alternative and swap
+        engines: P10/P18's best scores came from supplier alternatives taken back."""
+        cfg = config()["ask_options"]
+        sid = str(d.get("supplier_id"))
+        msg = d.get("message")
+        if not cfg["enabled"] or not isinstance(msg, dict) or msg.get("action") or not msg.get("term_sheets"):
+            return
+        body = msg.get("body")
+        if not isinstance(body, str):
+            return
+        sent = sum(m.get("from") == "buyer" for m in threads.get(sid, []))
+        t = tel.get(sid)
+        stalled = t is not None and t["mindset"] == "stalled"
+        last = self.asked.get(sid)
+        due = last is None or (stalled and sent - last >= cfg["repeat_after_messages"])
+        if not due or (t is not None and t["moves_left"] <= 2):
+            return
+        self.asked[sid] = sent
+        if any(marker in body.lower() for marker in cfg["markers"]):
+            return  # Claude already asked in its own words
+        msg["body"] = self._insert_before_closing(body, cfg["question"])
+
+    @staticmethod
+    def _insert_before_closing(body: str, text: str) -> str:
+        """Put `text` before the e-mail's closing (greeting line and/or our signature)."""
+        lines = body.split("\n")
+        closings = ("kind regards", "best regards", "regards", "sincerely", "mit freundlichen", "yours")
+        at = next((i for i, line in enumerate(lines) if SIGNATURE in line), len(lines))
+        if at > 0 and lines[at - 1].strip().lower().startswith(closings):
+            at -= 1
+        while at > 0 and not lines[at - 1].strip():
+            at -= 1
+        rest = lines[at:]
+        while rest and not rest[0].strip():
+            rest.pop(0)
+        return "\n".join([*lines[:at], "", text, "", *rest]).strip()
 
     def _neglected_thread(self, threads: Threads, live: list[str]) -> str | None:
         """The live thread whose unanswered supplier message has waited longest, if longer than

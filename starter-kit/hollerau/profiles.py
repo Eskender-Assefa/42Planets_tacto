@@ -97,6 +97,13 @@ class AlternativesConfig(TypedDict):
     min_gain_pct: float
 
 
+class AskOptionsConfig(TypedDict):
+    enabled: bool
+    repeat_after_messages: int  # ask again on a stall at most this often
+    markers: list[str]  # wording that shows Claude already asked
+    question: str  # appended when Claude did not ask
+
+
 class ConcessionGuardConfig(TypedDict):
     start_share: float
     span_share: float
@@ -115,6 +122,7 @@ class StrategyConfig(TypedDict):
     floor_pacing: FloorPacingConfig
     alternatives: AlternativesConfig
     concession_guard: ConcessionGuardConfig
+    ask_options: AskOptionsConfig
     lever_friction_pct: float  # % of price per changed non-price term: suppliers price our demands back in
     friction_fields: list[str]  # the terms friction applies to (not coverage / quality)
     llm: LLMConfig
