@@ -1,4 +1,8 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { useEffect } from "react";
+import { Volume2 } from "lucide-react";
+import { buildTurnSentence } from "@/lib/briefing";
+import { useSpeech } from "@/hooks/useSpeech";
 import { Shell, MindsetBadge, StatusDot } from "@/components/Shell";
 import { useCase, useSuppliers, supplierNames, eur, scoreLabel } from "@/lib/command";
 import { ClaimChips, DecisionTag, TelemetryCosts, TermSheet } from "@/components/Telemetry";
@@ -25,6 +29,9 @@ function Audit() {
   const { c, logs } = useCase(sessionId);
   const suppliers = useSuppliers();
   const k = c.data;
+  const turns = logs.data ?? [];
+  const speech = useSpeech(turns.map((l) => buildTurnSentence(l, (id) => suppliers.data?.get(id)?.name ?? "")));
+  useEffect(() => { speech.stop(); }, [sessionId, speech.stop]);
 
   return (
     <Shell>
@@ -58,6 +65,7 @@ function Audit() {
             <div className="panel p-5">
               <div className="flex flex-wrap items-center gap-4 border-b border-border pb-3">
                 <span className="num text-sm font-semibold">TURN {l.turn_number}</span>
+                {speech.supported && <Button variant="ghost" size="icon" title={`Narrate turn ${l.turn_number}`} aria-label={`Narrate turn ${l.turn_number}`} onClick={() => speech.play(turns.findIndex((t) => t.id === l.id), true)}><Volume2 /></Button>}
                 <span className="num text-xs uppercase tracking-wider text-muted-foreground">{suppliers.data?.get(l.supplier_id)?.name ?? l.supplier_id}</span>
                 <span className="num text-xs text-muted-foreground">{l.created_at ? new Date(l.created_at).toLocaleString() : "-"}</span>
               </div>

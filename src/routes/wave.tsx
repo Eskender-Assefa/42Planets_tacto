@@ -1,5 +1,8 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { Switch } from "@/components/ui/switch";
+import { buildLiveSentence, freshNarration } from "@/lib/briefing";
+import { useSpeech } from "@/hooks/useSpeech";
 import { Shell, MindsetBadge, StatusDot } from "@/components/Shell";
 import { useCaseOverview, useSuppliers, supplierNames, clock, scoreLabel, secondsRemaining } from "@/lib/command";
 import type { CaseOverview, Environment } from "@/integrations/hollerau/types";
@@ -26,9 +29,32 @@ const MAX_SECONDS = 600;
 function Wave() {
   const [env, setEnv] = useState<Environment | null>(null);
   const [wave, setWave] = useState<number | null>(null);
-  const { query, latestEnvironment } = useCaseOverview(env, wave);
+  const [narration, setNarration] = useState(false);
+  const speech = useSpeech([]);
+  const rows = useRef<CaseOverview[]>([]);
+  const seen = useRef(new Set<string>());
+  const { query, latestEnvironment } = useCaseOverview(env, wave, ({ table, row }) => {
+    if (!narration) return;
+    const c = rows.current.find((item) => item.session_id === row.session_id);
+    if (!c) return;
+    const log = table === "audit_logs" && "turn_number" in row ? row : null;
+    if (log) {
+      const key = `audit-${log.id}`;
+      if (seen.current.has(key) || !freshNarration(log.created_at)) return;
+      seen.current.add(key);
+      speech.enqueue(buildLiveSentence(c, log, (id) => suppliers.data?.get(id)?.name ?? ""), log.created_at);
+    } else if ("status" in row && row.status !== "active" && row.ended_at && freshNarration(row.ended_at)) {
+      const key = `finished-${row.session_id}-${row.status}`;
+      if (seen.current.has(key)) return;
+      seen.current.add(key);
+      // Cases events contain stored outcome values, not the overview's latest turn.
+      speech.enqueue(buildLiveSentence({ ...c, ...row }, null, (id) => suppliers.data?.get(id)?.name ?? ""), row.ended_at);
+    }
+  });
   const suppliers = useSuppliers();
   const data = query.data ?? [];
+  rows.current = data;
+  useEffect(() => { speech.stop(); seen.current.clear(); }, [env, wave, narration, speech.stop]);
   const activeEnv = env ?? latestEnvironment;
   const waves = [...new Set(data.map((c) => c.wave).filter((w): w is number => w != null))].sort((a, b) => a - b);
 
@@ -40,6 +66,7 @@ function Wave() {
           <h1 className="mt-1 text-3xl font-semibold tracking-tight">Live Wave Terminal</h1>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {speech.supported && <label className="mr-3 flex items-center gap-2 text-sm"><Switch checked={narration} onCheckedChange={setNarration} aria-label="Live narration" />Live narration</label>}
           {ENVIRONMENTS.map((e) => (
             <Button variant="outline" size="sm"
               key={e}

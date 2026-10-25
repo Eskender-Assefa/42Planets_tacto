@@ -47,13 +47,13 @@ export function useSpeech(sentences: string[]) {
     u.onerror = () => { if (token === generation.current) { busy.current = false; queue.current = []; setStatus("idle"); setCurrent(-1); } };
     utterance.current = u; engine.speak(u);
   }, []);
-  const run = useCallback(function next(at: number) {
+  const run = useCallback(function next(at: number, single = false) {
     const text = data.current[at];
     if (!text) { busy.current = false; setStatus("idle"); setCurrent(-1); return; }
     busy.current = true; index.current = at; setCurrent(at); setStatus("playing");
-    speak(text, () => next(at + 1));
+    speak(text, () => { if (single) { busy.current = false; setStatus("idle"); setCurrent(-1); } else next(at + 1); });
   }, [speak]);
-  const play = useCallback((at = 0) => { if (!synth()) return; stop(); synth()?.resume(); run(Math.max(0, at)); }, [stop, run]);
+  const play = useCallback((at = 0, single = false) => { if (!synth()) return; stop(); synth()?.resume(); run(Math.max(0, at), single); }, [stop, run]);
   const drain = useCallback(function next() {
     const item = queue.current.shift();
     if (!item) { busy.current = false; setStatus("idle"); return; }

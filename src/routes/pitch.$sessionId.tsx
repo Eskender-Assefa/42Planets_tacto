@@ -1,4 +1,8 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { useEffect } from "react";
+import { Play, Pause, Square } from "lucide-react";
+import { buildBriefingScript, buildTurnSentence } from "@/lib/briefing";
+import { useSpeech } from "@/hooks/useSpeech";
 import { Button } from "@/components/ui/button";
 import { TermSheet } from "@/components/Telemetry";
 import { MechanismStrip, NegotiationPath } from "@/components/NegotiationInsights";
@@ -22,6 +26,10 @@ function Pitch() {
   const suppliers = useSuppliers();
   const negotiation = c.data;
   const turns = orderedTurns(logs.data ?? []);
+  const name = (id: string) => suppliers.data?.get(id)?.name ?? "";
+  const sentences = negotiation ? buildBriefingScript(negotiation, turns, name, "full") : [];
+  const speech = useSpeech(sentences);
+  useEffect(() => { speech.stop(); }, [sessionId, speech.stop]);
   return <main className="pitch-page relative z-10 mx-auto max-w-[1400px] px-6 py-8">
     <div className="pitch-back mb-8"><Button asChild variant="ghost" size="sm"><Link to="/audit/$sessionId" params={{ sessionId }}>← back to audit</Link></Button></div>
     {c.isLoading ? <p>Loading…</p> : !negotiation ? <p className="text-muted-foreground">{c.isError ? "Negotiation data could not be loaded." : "-"}</p> : <>
@@ -31,14 +39,16 @@ function Pitch() {
           <p className="mt-3 break-words text-xl">{supplierNames(negotiation, suppliers.data)}</p>
           <p className="mt-2 text-lg text-muted-foreground">{displayText(negotiation.category_goal)}</p>
         </div>
-        <div><div className="label-caps mb-2">Final score</div><div className="num text-5xl text-success">{percentScore(negotiation.score)}</div></div>
+        <div><div className="label-caps mb-2">Final score</div><div className="num text-5xl text-success">{percentScore(negotiation.score)}</div>
+          {speech.supported && <div className="pitch-back mt-3 flex gap-2"><Button onClick={() => speech.status === "playing" ? speech.pause() : speech.status === "paused" ? speech.resume() : speech.play()}>{speech.status === "playing" ? <Pause /> : <Play />}{speech.status === "playing" ? "Pause" : speech.status === "paused" ? "Resume" : "Narrate"}</Button><Button variant="outline" size="icon" title="Stop narration" aria-label="Stop narration" onClick={speech.stop}><Square /></Button></div>}
+        </div>
       </header>
       {logs.isError && <p role="alert" className="text-destructive">Negotiation turns could not be loaded.</p>}
       <NegotiationPath c={negotiation} logs={turns} suppliers={suppliers.data} />
       <section className="mb-8"><h2 className="mb-4 text-2xl font-semibold">Negotiation story</h2>
         <ol className="border-l border-border pl-5">{turns.map((l) => {
           const mechanisms = parseMechanisms(l.mathematical_justification ?? "");
-          return <li key={l.id} className="pitch-turn border-b border-border py-4">
+          return <li key={l.id} aria-current={sentences[speech.current] === buildTurnSentence(l, name) ? "true" : undefined} className={`pitch-turn border-b border-border py-4 ${sentences[speech.current] === buildTurnSentence(l, name) ? "bg-accent text-accent-foreground" : ""}`}>
             <p className="break-words text-lg leading-relaxed"><span className="num">Turn {l.turn_number}</span> · {suppliers.data?.get(l.supplier_id)?.name ?? l.supplier_id} offered <span className="num">{unitPrice(l.supplier_terms?.unit_price)}</span> · we countered <span className="num">{unitPrice(l.proposed_terms?.unit_price)}</span> · {mechanisms.claimKind ? claimLabels[mechanisms.claimKind] : "-"}</p>
             <div className="mt-2"><MechanismStrip log={l} includeClaim={false} /></div>
           </li>;
