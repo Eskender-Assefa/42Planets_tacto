@@ -25,6 +25,7 @@ from anthropic.types.beta import BetaMessageParam, BetaOutputConfigParam, BetaTe
 
 from arena_kit.agents.llm import ID_RE, LLMAgent
 
+from . import swaps as swap_engine
 from .envelope import Envelope, ThreadEnvelope, coverage, envelope, safe_cost
 from .evidence import Brief, build_brief
 from .kit import (
@@ -98,7 +99,10 @@ Rules:
 12. Coverage: when an offer covers less than 100% of our need over the horizon (COVERAGE line),
    demand guaranteed pricing for the full volume over the full contract period - the uncovered
    rest is bought at the expensive fallback price.
-13. reasoning_audit: observed_barrier = the resistance or signal you see from the supplier;
+13. Trades: never give a lever the supplier wants (payment days, index clause, longer contract,
+   volume, freight) without the matching price cut listed in SWAPS - those cuts are computed by our
+   cost engine. When SWAPS marks a trade as MANDATORY, your first term sheet must be exactly it.
+14. reasoning_audit: observed_barrier = the resistance or signal you see from the supplier;
    strategic_intent = why this move and package, in one or two sentences, without numbers you did
    not copy."""
 
@@ -149,6 +153,8 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         self.c_open: float | None = None
         self.seen: dict[str, float] = {}  # supplier message_id -> when this agent first saw it
         self.shown_attachments: set[str] = set()
+        self.swaps: dict[str, list[swap_engine.Swap]] = {}
+        self.mandatory: dict[str, swap_engine.Swap] = {}
 
     # -- per case ------------------------------------------------------------------------------
 
@@ -192,6 +198,7 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         self.c_open = None
         self.seen = {}
         self.shown_attachments = set()
+        self.swaps, self.mandatory = {}, {}
         return state
 
     def _seconds_left(self) -> float | None:
@@ -265,6 +272,7 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         if neglected is not None and neglected != env["best_supplier"] and len(live) > 1:
             return self._fallback(case, threads, env, tel, neglected, "Thread close to the 60 s limit.")
         focus = [neglected] if neglected is not None else None
+        self._prepare_swaps(case, threads, env, tel)
 
         try:
             raw, latency = self._ask_claude(case, threads, env, tel, secs, focus)
@@ -274,6 +282,7 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
             checked = None
         if checked is None:
             checked = self._fallback(case, threads, env, tel)
+        self._note_swap(checked)
         self._remember_citations(checked)
         return checked
 
@@ -319,7 +328,7 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
             if status == "final_offer":
                 if cheapest_live is not None and c > cheapest_live + 0.01:
                     continue  # another supplier is cheaper: keep negotiating there
-            elif status != "agreed" and (target is None or c > target):
+            elif status != "agreed" and tel[sid]["moves_left"] > 1 and (target is None or c > target):
                 continue
             elif self._partial_negotiable(case, te) and tel[sid]["moves_left"] > 1:
                 continue  # demand full coverage first (strong_factors_plus.txt: reject partial offers)
@@ -466,6 +475,7 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
                 f"horizon; the uncovered part costs {_eur(te['uncovered_eur'])} at the fallback price. "
                 f"Our target covers {self._pct(te['target_coverage_pct'])}.",
                 f"POSITION: {env['position']} - {config()['leverage']['guidance'].get(env['position'], '')}",
+                *([block] if (block := self._swaps_block(sid)) else []),
                 "LEVERS (EUR change in our C vs. their standing sheet, same price; negative = saves us): "
                 + "; ".join(f"{lv['field']}={option_label(lv['value'])}: {lv['delta_eur']:+,.0f}" for lv in levers),
                 f"TELEMETRY: status {t['status']}, mindset {t['mindset']}, concession velocity "
@@ -536,6 +546,61 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         if best is None:
             return closing_move(case, threads)
         return {"supplier_id": best[1], "message": {"action": {"type": "accept", "term_sheet_id": best[2]}}}
+
+    # -- v3 swap engine (swaps.py) --------------------------------------------------------------
+
+    def _prepare_swaps(self, case: JSONObject, threads: Threads, env: Envelope, tel: dict[str, Telemetry]) -> None:
+        cfg = config()["swaps"]
+        self.swaps, self.mandatory = {}, {}
+        if not cfg["enabled"]:
+            return
+        for sid, te in env["threads"].items():
+            events = threads.get(sid, [])
+            found = swap_engine.swaps(case, te, events, cfg)
+            if not found:
+                continue
+            self.swaps[sid] = found
+            sent = sum(m.get("from") == "buyer" for m in events)
+            asked = swap_engine.wants(events, cfg, last_n=1) & {s["field"] for s in found}
+            if swap_engine.stalled(tel[sid]["concession_velocity"], sent, cfg) or (sent >= 1 and asked):
+                self.mandatory[sid] = next((s for s in found if s["field"] in asked), found[0])
+
+    @staticmethod
+    def _has_sheet(sheets: list[JSONValue], terms: JSONObject) -> bool:
+        return any(isinstance(x, dict) and x.get("terms") == terms for x in sheets)
+
+    def _swaps_block(self, sid: str) -> str:
+        found = self.swaps.get(sid)
+        if not found:
+            return ""
+        must = self.mandatory.get(sid)
+        lines = []
+        for s in found:
+            tag = "MANDATORY this turn" if s is must else ("they asked" if s["wanted"] else "free for us")
+            lines.append(
+                f"[{tag}] give {s['field']}={option_label(s['value'])} for unit price EUR {s['ask_price']:,.2f} "
+                f"(-{s['cut_pct']:.1f}%; our break-even EUR {s['breakeven_per_unit']:,.2f}/unit) -> sheet "
+                f"{json.dumps(s['sheet'])}, C {_eur(s['c_true'])}"
+            )
+        return "SWAPS (Python-priced trades): " + " ; ".join(lines)
+
+    def _note_swap(self, d: JSONObject) -> None:
+        sid = str(d.get("supplier_id"))
+        msg = d.get("message")
+        must = self.mandatory.get(sid)
+        if must is None or not isinstance(msg, dict):
+            return
+        sheets = msg.get("term_sheets")
+        if not isinstance(sheets, list) or not self._has_sheet(sheets, must["sheet"]):
+            return
+        audit = msg.get("reasoning_audit")
+        if isinstance(audit, dict) and isinstance(audit.get("mathematical_justification"), str):
+            be_pct = must["breakeven_per_unit"] / must["ask_price"] * 100 if must["ask_price"] else 0.0
+            audit["mathematical_justification"] = (
+                str(audit["mathematical_justification"])
+                + f" | swap offered: {must['field']}={option_label(must['value'])} for -{must['cut_pct']:.1f}%"
+                + f" (break-even -{be_pct:.1f}%)"
+            )
 
     # -- Python gates --------------------------------------------------------------------------
 
@@ -614,7 +679,12 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
                     kept.append({**cast(JSONObject, s), "terms": terms})
             if not kept and te["target_terms"]:
                 kept = [{"terms": te["target_terms"]}]
-            msg["term_sheets"] = self._equivalent(case, te, kept)[:3]
+            sheets_out: list[JSONValue] = self._equivalent(case, te, kept)[:3]
+            must = self.mandatory.get(sid)
+            if must is not None and not self._has_sheet(sheets_out, must["sheet"]):
+                trade: JSONValue = {"terms": must["sheet"]}
+                sheets_out = [trade, *sheets_out][:3]  # the trade goes first
+            msg["term_sheets"] = sheets_out
         return self._with_audit(case, d, env, tel, "claude", observed, intent, latency)
 
     def _coverage_fields(self, case: JSONObject) -> list[str]:

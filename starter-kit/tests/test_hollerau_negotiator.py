@@ -33,6 +33,14 @@ class StandInClient:
         return SimpleNamespace(stop_reason="end_turn", content=[block], usage=usage)
 
 
+@pytest.fixture
+def no_swaps(monkeypatch):
+    """Tests of Claude's own sheets: switch the v3 swap engine off (it would add a trade first)."""
+    from hollerau.profiles import config
+
+    monkeypatch.setitem(config()["swaps"], "enabled", False)
+
+
 @pytest.fixture(scope="module")
 def p02():
     for p in (CASES, P02_THREADS, PACKAGE):
@@ -72,7 +80,7 @@ def test_schema_is_strict_and_uses_option_labels(p02):
     assert kwargs["system"][1]["cache_control"] == {"type": "ephemeral"}  # the per-case brief is cached
 
 
-def test_claude_send_is_mapped_priced_and_audited(p02):
+def test_claude_send_is_mapped_priced_and_audited(p02, no_swaps):
     case, threads, pkg = p02
     d = HollerauAgent(StandInClient(_reply(price=360.0, payment="90")), pkg).decide(case, threads)
     msg = d["message"]
@@ -110,7 +118,7 @@ def test_claude_outage_falls_back_to_target_counter(p02):
     assert msg["term_sheets"] and SIGNATURE in msg["body"]
 
 
-def test_dearer_option_b_is_dropped(p02):
+def test_dearer_option_b_is_dropped(p02, no_swaps):
     """Only sheets of (about) equal true C survive: a dearer extra sheet is a concession in disguise."""
     from hollerau.envelope import envelope, safe_cost
     from hollerau.profiles import protocol

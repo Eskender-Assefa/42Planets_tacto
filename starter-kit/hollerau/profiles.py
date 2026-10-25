@@ -63,6 +63,20 @@ class LeverageConfig(TypedDict):
     guidance: dict[str, str]  # position -> prompt guidance
 
 
+class SwapsConfig(TypedDict):
+    enabled: bool
+    premium: float  # ask this multiple of our break-even price cut
+    max_cut_pct: float  # never ask more than this % off the supplier's price
+    trigger_velocity_pct: float  # a concession step below this % of C_open counts as a stall
+    default_ask_pct: dict[str, float]  # per lever: the doc's default ask (% of price)
+    default_ask_eur: dict[str, float]  # per lever: default ask in EUR per unit
+    want_patterns: dict[str, list[str]]  # per lever: supplier wording that signals it wants it
+
+
+class PacingConfig(TypedDict):
+    hold_until_progress: float
+
+
 class StrategyConfig(TypedDict):
     segments: dict[str, SegmentConfig]
     cultures: dict[str, CultureConfig]
@@ -71,6 +85,8 @@ class StrategyConfig(TypedDict):
     relationship_price_search: PriceSearchConfig
     telemetry: TelemetryConfig
     leverage: LeverageConfig
+    swaps: SwapsConfig
+    pacing: PacingConfig
     llm: LLMConfig
 
 

@@ -379,6 +379,8 @@ def thread_envelope(
     position: Position = "balanced",
 ) -> ThreadEnvelope:
     lev = config()["leverage"]
+    hold = config()["pacing"]["hold_until_progress"]
+    p = 0.0 if p < hold else (p - hold) / max(1.0 - hold, 1e-9)  # v3: no concessions while holding
     aggr = lev["aggressiveness"].get(position, 1.0)
     soften = lev["vulnerable_landing_pct"] if position == "vulnerable" else 0.0
     std = standard_terms(events)

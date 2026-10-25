@@ -72,5 +72,26 @@
       "vulnerable": "Our alternative is far dearer than the opening offers, or there is none."
     }
   },
+  "swaps": {
+    "_comment": "v3_improvements.txt: trade a lever the supplier wants for a price cut >= premium x our break-even (or the default ask). enabled=false switches the engine off.",
+    "enabled": true,
+    "premium": 1.5,
+    "max_cut_pct": 10.0,
+    "trigger_velocity_pct": 0.5,
+    "default_ask_pct": {"payment_days": 5.0, "index_clause": 8.0, "contract_months": 4.5, "volume_per_year": 4.5, "lead_time_days": 3.0, "effective_date": 3.0},
+    "default_ask_eur": {"incoterm": 2.5},
+    "want_patterns": {
+      "payment_days": ["faster payment", "payment terms", "cash flow", "liquidity", "zahlungsziel", "early payment", "pay earlier"],
+      "index_clause": ["index clause", "preisgleitklausel", "price adjustment clause", "raw material", "index-linked", "material cost protection"],
+      "contract_months": ["contract term", "longer-term", "long-term", "framework", "planning security", "multi-year", "months"],
+      "volume_per_year": ["volume", "commit to", "binding", "quantity"],
+      "incoterm": ["freight", "transport", "logistics", "delivery terms", "incoterm"],
+      "lead_time_days": ["lead time", "lieferzeit", "capacity"]
+    }
+  },
+  "pacing": {
+    "_comment": "v3: hold the anchor until this share of the case, then slide to the landing. 0 = old smooth curve.",
+    "hold_until_progress": 0.3
+  },
   "llm": {"timeout_s": 35.0, "max_tokens": 4000, "history_messages": 6, "equivalent_sheet_pct": 0.3, "keepalive_s": 25.0}
 }
