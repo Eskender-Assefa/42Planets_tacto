@@ -11,12 +11,12 @@ export function Shell({ children }: { children: ReactNode }) {
   return (
     <div className="relative z-10 min-h-screen">
       <header className="sticky top-0 z-20 border-b border-border bg-background/90 backdrop-blur">
-        <div className="mx-auto flex max-w-[1500px] items-center gap-8 px-6 py-3">
+        <div className="mx-auto flex max-w-[1500px] flex-wrap items-center gap-3 px-6 py-3 sm:gap-8">
           <Link to="/" className="flex items-center gap-3">
             <span className="grid h-7 w-7 place-items-center bg-primary num text-xs font-bold text-primary-foreground">H</span>
             <span className="font-semibold tracking-tight">Hollerau Agentic Command</span>
           </Link>
-          <nav className="flex gap-1">
+          <nav className="order-3 flex w-full flex-wrap gap-1 sm:order-none sm:w-auto">
             {nav.map((n) => (
               <Link
                 key={n.to}
