@@ -1,7 +1,9 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { Shell, MindsetBadge, StatusDot } from "@/components/Shell";
-import { useCaseOverview, useSuppliers, supplierNames, eur, scoreLabel } from "@/lib/command";
+import { useCaseOverview, useListedAuditLogs, useSuppliers, supplierNames, eur, scoreLabel } from "@/lib/command";
+import { leftOnTable, shortEur, summarizeMoves } from "@/lib/telemetry";
+import { Button } from "@/components/ui/button";
 import type { Environment } from "@/integrations/hollerau/types";
 
 export const Route = createFileRoute("/")({
@@ -26,6 +28,8 @@ function Grid() {
   const { query, latestEnvironment } = useCaseOverview(env, wave);
   const suppliers = useSuppliers();
   const data = query.data ?? [];
+  const audit = useListedAuditLogs(data.map((c) => c.session_id));
+  const summaries = new Map(data.map((c) => [c.session_id, summarizeMoves((audit.data ?? []).filter((l) => l.session_id === c.session_id))]));
   const activeEnv = env ?? latestEnvironment;
   const waves = [...new Set(data.map((c) => c.wave).filter((w): w is number => w != null))].sort((a, b) => a - b);
   const active = data.filter((c) => c.status === "active").length;
@@ -35,29 +39,29 @@ function Grid() {
     <Shell>
       <div className="mb-6 flex flex-wrap items-center gap-2">
         {ENVIRONMENTS.map((e) => (
-          <button
+          <Button variant="outline" size="sm"
             key={e}
             onClick={() => setEnv(e)}
             className={`border px-3 py-1.5 num text-xs uppercase tracking-wider ${activeEnv === e ? "border-primary text-primary" : "border-border text-muted-foreground hover:text-foreground"}`}
           >
             {e}
-          </button>
+          </Button>
         ))}
         <span className="mx-2 h-4 w-px bg-border" />
-        <button
+        <Button variant="outline" size="sm"
           onClick={() => setWave(null)}
           className={`border px-3 py-1.5 num text-xs uppercase tracking-wider ${wave == null ? "border-primary text-primary" : "border-border text-muted-foreground hover:text-foreground"}`}
         >
           All waves
-        </button>
+        </Button>
         {waves.map((w) => (
-          <button
+          <Button variant="outline" size="sm"
             key={w}
             onClick={() => setWave(w)}
             className={`border px-3 py-1.5 num text-xs uppercase tracking-wider ${wave === w ? "border-primary text-primary" : "border-border text-muted-foreground hover:text-foreground"}`}
           >
             Wave {w}
-          </button>
+          </Button>
         ))}
       </div>
 
@@ -78,30 +82,33 @@ function Grid() {
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-border text-left">
-              {["Session", "Case", "Suppliers", "Category goal", "Wave", "Turn", "C open", "Last offer", "C best", "Score", "Mindset", "Status", ""].map((h) => (
+              {["Session", "Case", "Suppliers", "Category goal", "Wave", "Turn", "C open", "Last offer", "C best", "Score", "Claims", "Moves", "Left on table", "Mindset", "Status", ""].map((h) => (
                 <th key={h} className="px-4 py-3 label-caps font-normal">{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
             {query.isLoading && (
-              <tr><td colSpan={13} className="px-4 py-8 text-center text-muted-foreground">Loading…</td></tr>
+              <tr><td colSpan={16} className="px-4 py-8 text-center text-muted-foreground">Loading…</td></tr>
             )}
             {!query.isLoading && data.length === 0 && (
-              <tr><td colSpan={13} className="px-4 py-8 text-center text-muted-foreground">No cases yet — start the runner.</td></tr>
+              <tr><td colSpan={16} className="px-4 py-8 text-center text-muted-foreground">No cases yet — start the runner.</td></tr>
             )}
             {data.map((c) => (
               <tr key={c.session_id} className="border-b border-border/60 hover:bg-accent/40">
                 <td className="px-4 py-3 num text-xs text-muted-foreground">{c.session_id}</td>
                 <td className="px-4 py-3 font-medium">{c.title ?? c.case_id}</td>
                 <td className="px-4 py-3">{supplierNames(c, suppliers.data)}</td>
-                <td className="px-4 py-3 text-muted-foreground">{c.category_goal ?? "—"}</td>
-                <td className="px-4 py-3 num">{c.wave ?? "—"}</td>
-                <td className="px-4 py-3 num">{c.last_turn ?? "—"}</td>
+                <td className="px-4 py-3 text-muted-foreground">{c.category_goal ?? "-"}</td>
+                <td className="px-4 py-3 num">{c.wave ?? "-"}</td>
+                <td className="px-4 py-3 num">{c.last_turn ?? "-"}</td>
                 <td className="px-4 py-3 num">{eur(c.c_open)}</td>
                 <td className="px-4 py-3 num text-primary">{eur(c.last_c_supplier_offer)}</td>
                 <td className="px-4 py-3 num">{eur(c.c_best)}</td>
                 <td className="px-4 py-3 num">{scoreLabel(c.score)}</td>
+                <td className={`px-4 py-3 num whitespace-nowrap ${summaries.get(c.session_id)?.claims?.contradicted ? "text-destructive" : "text-success"}`}>{audit.data && summaries.get(c.session_id)?.claims ? `${summaries.get(c.session_id)?.claims?.verified}/${summaries.get(c.session_id)?.claimTotal}` : "-"}</td>
+                <td className="px-4 py-3 num whitespace-nowrap">{audit.data ? `${summaries.get(c.session_id)?.counters} · ${summaries.get(c.session_id)?.paced} paced` : "-"}</td>
+                <td className="px-4 py-3 num whitespace-nowrap" title={eur(leftOnTable(c))}>{shortEur(leftOnTable(c))}</td>
                 <td className="px-4 py-3"><MindsetBadge m={c.last_mindset} /></td>
                 <td className="px-4 py-3"><StatusDot s={c.status} /></td>
                 <td className="px-4 py-3">

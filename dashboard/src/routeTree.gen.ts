@@ -14,6 +14,7 @@ import { Route as ScoreboardRouteImport } from './routes/scoreboard'
 import { Route as WaveRouteImport } from './routes/wave'
 import { Route as AuditSessionIdRouteImport } from './routes/audit.$sessionId'
 import { Route as BriefingSessionIdRouteImport } from './routes/briefing.$sessionId'
+import { Route as PitchSessionIdRouteImport } from './routes/pitch.$sessionId'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -40,6 +41,11 @@ const BriefingSessionIdRoute = BriefingSessionIdRouteImport.update({
   path: '/briefing/$sessionId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const PitchSessionIdRoute = PitchSessionIdRouteImport.update({
+  id: '/pitch/$sessionId',
+  path: '/pitch/$sessionId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -47,6 +53,7 @@ export interface FileRoutesByFullPath {
   '/wave': typeof WaveRoute
   '/audit/$sessionId': typeof AuditSessionIdRoute
   '/briefing/$sessionId': typeof BriefingSessionIdRoute
+  '/pitch/$sessionId': typeof PitchSessionIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -54,6 +61,7 @@ export interface FileRoutesByTo {
   '/wave': typeof WaveRoute
   '/audit/$sessionId': typeof AuditSessionIdRoute
   '/briefing/$sessionId': typeof BriefingSessionIdRoute
+  '/pitch/$sessionId': typeof PitchSessionIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -62,14 +70,25 @@ export interface FileRoutesById {
   '/wave': typeof WaveRoute
   '/audit/$sessionId': typeof AuditSessionIdRoute
   '/briefing/$sessionId': typeof BriefingSessionIdRoute
+  '/pitch/$sessionId': typeof PitchSessionIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
-    '/' | '/scoreboard' | '/wave' | '/audit/$sessionId' | '/briefing/$sessionId'
+    | '/'
+    | '/scoreboard'
+    | '/wave'
+    | '/audit/$sessionId'
+    | '/briefing/$sessionId'
+    | '/pitch/$sessionId'
   fileRoutesByTo: FileRoutesByTo
   to:
-    '/' | '/scoreboard' | '/wave' | '/audit/$sessionId' | '/briefing/$sessionId'
+    | '/'
+    | '/scoreboard'
+    | '/wave'
+    | '/audit/$sessionId'
+    | '/briefing/$sessionId'
+    | '/pitch/$sessionId'
   id:
     | '__root__'
     | '/'
@@ -77,6 +96,7 @@ export interface FileRouteTypes {
     | '/wave'
     | '/audit/$sessionId'
     | '/briefing/$sessionId'
+    | '/pitch/$sessionId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -85,6 +105,7 @@ export interface RootRouteChildren {
   WaveRoute: typeof WaveRoute
   AuditSessionIdRoute: typeof AuditSessionIdRoute
   BriefingSessionIdRoute: typeof BriefingSessionIdRoute
+  PitchSessionIdRoute: typeof PitchSessionIdRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -124,6 +145,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof BriefingSessionIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/pitch/$sessionId': {
+      id: '/pitch/$sessionId'
+      path: '/pitch/$sessionId'
+      fullPath: '/pitch/$sessionId'
+      preLoaderRoute: typeof PitchSessionIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -133,6 +161,7 @@ const rootRouteChildren: RootRouteChildren = {
   WaveRoute: WaveRoute,
   AuditSessionIdRoute: AuditSessionIdRoute,
   BriefingSessionIdRoute: BriefingSessionIdRoute,
+  PitchSessionIdRoute: PitchSessionIdRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

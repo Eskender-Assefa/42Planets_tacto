@@ -95,6 +95,8 @@
   --chart-3: oklch(0.82 0.16 85);
   --chart-4: oklch(0.63 0.22 25);
   --chart-5: oklch(0.65 0.01 260);
+  --chart-6: oklch(0.72 0.15 330);
+  --chart-7: oklch(0.72 0.13 185);
   --sidebar: oklch(0.15 0.006 260);
   --sidebar-foreground: oklch(0.93 0.005 90);
   --sidebar-primary: oklch(0.72 0.18 50);
@@ -130,4 +132,13 @@
 
 @media (prefers-reduced-motion: reduce) {
   .live { animation: none; }
+}
+
+@media print {
+  @page { size: A4 landscape; margin: 12mm; }
+  body:has(.pitch-page) { --background: oklch(1 0 0); --foreground: oklch(0.2 0 0); --card: oklch(1 0 0); --muted: oklch(0.95 0 0); --muted-foreground: oklch(0.4 0 0); --border: oklch(0.8 0 0); --primary: oklch(0.5 0.15 50); --info: oklch(0.45 0.12 240); --success: oklch(0.45 0.13 150); --warning: oklch(0.5 0.1 85); --color-background: var(--background); --color-foreground: var(--foreground); --color-muted: var(--muted); --color-muted-foreground: var(--muted-foreground); --color-border: var(--border); --color-info: var(--info); --color-success: var(--success); --color-warning: var(--warning); color: var(--foreground); background-image: none; }
+  body:has(.pitch-page)::before, .pitch-back { display: none; }
+  .pitch-page { max-width: none; padding: 0; }
+  .pitch-turn, .pitch-terms, .negotiation-path { break-inside: avoid; }
+  .pitch-page * { print-color-adjust: exact; }
 }

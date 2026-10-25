@@ -42,7 +42,9 @@ export function Shell({ children }: { children: ReactNode }) {
 export function MindsetBadge({ m }: { m?: string | null | undefined }) {
   if (!m) return <span className="label-caps">-</span>;
   const cls =
-    m === "Stalled"
+    m === "unread"
+      ? "border-border text-muted-foreground"
+      : m === "Stalled"
       ? "border-warning text-warning"
       : m === "Critical_Breakoff"
         ? "border-destructive text-destructive"
