@@ -4,6 +4,7 @@ import { useCase, useSuppliers, supplierNames, eur, scoreLabel } from "@/lib/com
 import { ClaimChips, DecisionTag, TelemetryCosts, TermSheet } from "@/components/Telemetry";
 import { displayText, latencyLabel, velocityLabel } from "@/lib/telemetry";
 import { Button } from "@/components/ui/button";
+import { EvidenceCard, HighlightedEmail, MechanismStrip, NegotiationPath } from "@/components/NegotiationInsights";
 
 export const Route = createFileRoute("/audit/$sessionId")({
   head: ({ params }) => ({
@@ -37,7 +38,7 @@ function Audit() {
             </div>
           )}
         </div>
-        <Button asChild><Link to="/briefing/$sessionId" params={{ sessionId }} className="num text-xs">D · Voice briefing →</Link></Button>
+        <div className="flex flex-wrap gap-2"><Button asChild variant="outline"><Link to="/pitch/$sessionId" params={{ sessionId }} className="num text-xs">Pitch view →</Link></Button><Button asChild><Link to="/briefing/$sessionId" params={{ sessionId }} className="num text-xs">D · Voice briefing →</Link></Button></div>
       </div>
 
       {k && (
@@ -48,6 +49,8 @@ function Audit() {
         </div>
       )}
 
+      {k && <NegotiationPath c={k} logs={logs.data ?? []} suppliers={suppliers.data} />}
+      {(c.isError || logs.isError) && <p role="alert" className="mb-4 text-destructive">Negotiation data could not be loaded.</p>}
       <ol className="relative space-y-4 border-l border-border pl-6">
         {(logs.data ?? []).slice().reverse().map((l) => (
           <li key={l.id} className="relative">
@@ -76,13 +79,15 @@ function Audit() {
                   <div className="flex flex-wrap items-center gap-2"><span className="num text-xs uppercase text-primary">{l.action?.replace("_", " ") ?? "-"}</span><DecisionTag source={l.decision_source} latency={l.llm_latency_ms} /></div>
                   {l.llm_latency_ms == null && <div className="text-xs text-muted-foreground">LLM latency: {latencyLabel(l.llm_latency_ms)}</div>}
                   <TermSheet label="Proposed terms" terms={l.proposed_terms} />
+                   <MechanismStrip log={l} />
+                   <EvidenceCard log={l} />
                   <Field k="Strategic intent" v={l.strategic_intent} />
                   <Field k="Observed barrier" v={l.observed_barrier} />
                   <div><div className="label-caps mb-2">Claim verdicts</div><ClaimChips claims={l.claims} /></div>
                   <div className="border-l-2 border-primary bg-muted/40 p-3 text-sm text-muted-foreground">
                     <div className="label-caps mb-2">E-mail</div>
                     <div className="mb-2 break-words font-medium text-foreground">{displayText(l.message_subject)}</div>
-                    <p className="whitespace-pre-wrap break-words leading-relaxed">{displayText(l.message_body)}</p>
+                    <p className="whitespace-pre-wrap break-words leading-relaxed"><HighlightedEmail body={l.message_body} /></p>
                   </div>
                 </section>
               </div>
