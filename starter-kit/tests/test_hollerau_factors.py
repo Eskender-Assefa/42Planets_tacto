@@ -132,3 +132,26 @@ def test_cheaper_alternative_of_a_final_offer_is_proposed_back(ctx):
     assert msg["reasoning_audit"]["decision_source"] == "rule"
     d2 = agent.decide(cases["case:P10"], {sup: events[:k]})  # same state again: proposed once only
     assert d2["message"].get("action", {}).get("type") == "accept"
+
+
+def test_claude_cannot_give_away_the_chargeback_early(ctx):
+    """P11 (three runs): Claude dropped the EUR 500 chargeback to 0 for EUR 1 and the supplier agreed.
+    The concession guard vetoes that sheet; the deterministic counter keeps the protection."""
+    from hollerau.negotiator import HollerauAgent
+
+    cases, pkg = ctx
+    sup, events = "sup:70140", _threads("P11")["sup:70140"][:3]
+    reply = {
+        "reasoning_audit": {"observed_barrier": "chargeback too high", "strategic_intent": "drop it"},
+        "decision": {
+            "supplier_id": sup,
+            "action": "send",
+            "subject": "Re",
+            "outbound_email_text": "We drop the chargeback.",
+            "term_sheets": [{"ppm_commitment": "1500", "chargeback_eur_per_complaint": "0", "unit_price": 48.99}],
+        },
+    }
+    d = HollerauAgent(StandInClient(reply), pkg).decide(cases["case:P11"], {sup: events})
+    sheets = d["message"]["term_sheets"]
+    assert d["message"]["reasoning_audit"]["decision_source"] == "fallback"
+    assert all(s["terms"]["chargeback_eur_per_complaint"] > 0 for s in sheets)

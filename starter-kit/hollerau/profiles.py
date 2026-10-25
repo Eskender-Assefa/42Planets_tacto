@@ -97,6 +97,11 @@ class AlternativesConfig(TypedDict):
     min_gain_pct: float
 
 
+class ConcessionGuardConfig(TypedDict):
+    start_share: float
+    span_share: float
+
+
 class StrategyConfig(TypedDict):
     segments: dict[str, SegmentConfig]
     cultures: dict[str, CultureConfig]
@@ -109,6 +114,7 @@ class StrategyConfig(TypedDict):
     pacing: PacingConfig
     floor_pacing: FloorPacingConfig
     alternatives: AlternativesConfig
+    concession_guard: ConcessionGuardConfig
     lever_friction_pct: float  # % of price per changed non-price term: suppliers price our demands back in
     friction_fields: list[str]  # the terms friction applies to (not coverage / quality)
     llm: LLMConfig

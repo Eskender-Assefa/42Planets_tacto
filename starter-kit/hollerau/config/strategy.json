@@ -94,6 +94,7 @@
     "enabled": true,
     "steps": [[3, 0.0], [6, 0.05], [9, 0.15]]
   },
+  "concession_guard": {"_comment": "Claude's counter-sheets may concede at most start + span x progress of the gap between our target and the supplier's standing sheet.", "start_share": 0.25, "span_share": 0.5},
   "lever_friction_pct": 1.0,
   "friction_fields": ["lead_time_days", "index_clause", "incoterm", "effective_date", "tooling_eur"],
   "alternatives": {

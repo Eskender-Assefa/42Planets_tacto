@@ -730,8 +730,23 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
                 c = safe_cost(case, terms, te["standard"], te["supplier_estimate"])
                 if te["c_true_standing"] is None or c < te["c_true_standing"]:
                     kept.append({**cast(JSONObject, s), "terms": terms})
-            if not kept and te["target_terms"]:
-                kept = [{"terms": te["target_terms"]}]
+            allowance = self._concession_allowance(te, t, env["progress"])
+            if allowance is not None and kept:
+                within: list[JSONValue] = []
+                for x in kept:
+                    sheet_terms = x.get("terms") if isinstance(x, dict) else None
+                    if isinstance(sheet_terms, dict):
+                        cost = safe_cost(case, sheet_terms, te["standard"], te["supplier_estimate"])
+                        if cost <= allowance:
+                            within.append(x)
+                if not within:
+                    log.info("Claude's sheets concede more than allowed this early - deterministic counter")
+                    return None  # the fallback counter keeps e-mail text and sheet consistent
+                kept = within
+            if not kept:
+                # no sheet of Claude's survived: never slip another sheet under its e-mail text
+                log.info("no Claude sheet passed the gates - deterministic counter")
+                return None
             sheets_out: list[JSONValue] = self._equivalent(case, te, kept)[:3]
             must = self.mandatory.get(sid)
             if must is not None and not self._has_sheet(sheets_out, must["sheet"]):
@@ -789,6 +804,20 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         sid = next(iter(env["threads"]))
         return {"supplier_id": sid, "message": {"action": {"type": "walk_away"}}}
 
+    @staticmethod
+    def _concession_allowance(te: ThreadEnvelope, t: Telemetry, progress: float) -> float | None:
+        """The dearest C a counter-sheet may have now: our target plus a share of the gap to the
+        supplier's standing sheet that grows with the case (P11: Claude dropped a EUR 10.7k
+        chargeback for EUR 1; P02: it offered the supplier's own price on turn 2). Not near the end."""
+        target, standing = te["c_target"], te["c_true_standing"]
+        if target is None or standing is None or standing <= target:
+            return None
+        if t["moves_left"] <= 2 or t["status"] == "final_offer":
+            return None  # closing must never be blocked
+        cfg = config()["concession_guard"]
+        share = min(1.0, cfg["start_share"] + cfg["span_share"] * progress)
+        return target + (standing - target) * share
+
     def _equivalent(self, case: JSONObject, te: ThreadEnvelope, sheets: list[JSONValue]) -> list[JSONValue]:
         """Multiple sheets must be equivalent for us (MESO): a supplier will pick the one it likes
         best, so a dearer 'option B' is a concession in disguise. Keep those within the tolerance
@@ -825,7 +854,8 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         if te["target_terms"] is None or t["moves_left"] <= 1 or t["mindset"] == "critical_breakoff":
             d = self._close(case, threads, env)
             return self._with_audit(case, d, env, tel, "fallback", "Last chance to close.", "Close on the best sheet.")
-        terms = complete_offer(case, te["target_terms"])
+        must = self.mandatory.get(sid)  # an engine-priced trade, if one is due, beats the plain target
+        terms = complete_offer(case, must["sheet"] if must is not None else te["target_terms"])
         price = _num(terms.get("unit_price"))
         body = (
             "Dear Sir or Madam,\n\nthank you for your offer. To move forward we propose the attached terms"
