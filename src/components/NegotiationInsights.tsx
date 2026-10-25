@@ -55,7 +55,7 @@ export function NegotiationPath({ c, logs, suppliers }: { c: CaseOverview; logs:
   const active = selected && ids.includes(selected) ? selected : ids[0];
   const points = orderedTurns(logs.filter((l) => l.supplier_id === active));
   const last = points.at(-1);
-  const deal = c.status === "deal" && c.c_deal != null && c.deal_supplier_id === active && last;
+  const deal = c.status === "deal" && c.c_deal != null && (c.deal_supplier_id === active || (!c.deal_supplier_id && ids.length === 1)) && last ? { turn: last.turn_number, cost: c.c_deal } : null;
   return <section className="negotiation-path mb-8 min-w-0 border-y border-border py-5">
     <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
       <h2 className="text-xl font-semibold">Negotiation path</h2>
@@ -70,7 +70,7 @@ export function NegotiationPath({ c, logs, suppliers }: { c: CaseOverview; logs:
         {([["Opening", c.c_open], ["Best possible", c.c_best], ["Alternative (no deal)", c.c_alt]] as const).map(([label, value], i) => value == null ? null : <ReferenceLine key={label} y={value} ifOverflow="extendDomain" stroke={i === 1 ? "var(--success)" : "var(--muted-foreground)"} strokeDasharray="4 4" label={{ value: label, position: "insideTopRight", fill: "var(--muted-foreground)", fontSize: 10 }} />)}
         <Line name="Supplier offer" dataKey="c_supplier_offer" stroke="var(--primary)" strokeWidth={2} dot={{ r: 4 }} isAnimationActive={false} connectNulls={false} />
         <Line name="Our counter" dataKey="c_proposed" stroke="var(--info)" strokeWidth={2} dot={{ r: 4 }} isAnimationActive={false} connectNulls={false} />
-        {deal && <ReferenceDot x={last.turn_number} y={c.c_deal ?? undefined} r={7} fill="var(--success)" stroke="var(--background)" ifOverflow="extendDomain" label={{ value: "Deal", position: "top", fill: "var(--success)" }} />}
+        {deal && <ReferenceDot x={deal.turn} y={deal.cost} r={7} fill="var(--success)" stroke="var(--background)" ifOverflow="extendDomain" label={{ value: "Deal", position: "top", fill: "var(--success)" }} />}
       </LineChart>
     </ChartContainer>}
     <div className="mt-3 flex flex-wrap gap-5 text-xs"><span className="text-primary">● Supplier offer</span><span className="text-info">● Our counter</span></div>

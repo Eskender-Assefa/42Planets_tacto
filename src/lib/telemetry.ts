@@ -49,13 +49,14 @@ export function parseMechanisms(justification: string): { claimKind: string | nu
   const result: ReturnType<typeof parseMechanisms> = { claimKind: null, paced: [], swap: null };
   for (const tag of justification.split(" | ")) {
     const claim = tag.trim().match(/^claim attached: (\w+)$/);
-    if (claim && claimLabels[claim[1]]) result.claimKind = claim[1];
+    const kind = claim?.[1];
+    if (kind && claimLabels[kind]) result.claimKind = kind;
     if (tag.trim().startsWith("paced to min C EUR ")) {
       const pairs = tag.slice(tag.indexOf(":") + 1).matchAll(/(-?\d+(?:\.\d+)?)\s*->\s*(-?\d+(?:\.\d+)?)/g);
       for (const pair of pairs) result.paced.push({ from: Number(pair[1]), to: Number(pair[2]) });
     }
     const swap = tag.trim().match(/^swap offered: (\w+)=(.+?) for -(\d+(?:\.\d+)?)% \(break-even -\d+(?:\.\d+)?%\)$/);
-    if (swap) result.swap = { field: swap[1], value: swap[2], cutPct: Number(swap[3]) };
+    if (swap?.[1] && swap[2] && swap[3]) result.swap = { field: swap[1], value: swap[2], cutPct: Number(swap[3]) };
   }
   return result;
 }
@@ -90,10 +91,11 @@ export function summarizeMoves(logs: AuditLog[]) {
 export function bestCaseScores(cases: CaseOverview[]) {
   const groups = new Map<string, CaseOverview[]>();
   for (const c of cases) groups.set(c.case_id, [...(groups.get(c.case_id) ?? []), c]);
-  return [...groups.values()].map((rows) => {
+  return [...groups.values()].flatMap((rows) => {
     const newest = rows.slice().sort((a, b) => b.started_at.localeCompare(a.started_at))[0];
+    if (!newest) return [];
     const scores = rows.map((r) => r.score).filter((s): s is number => s != null);
-    return { caseId: newest.case_id, caseType: newest.case_type ?? "-", sessionId: newest.session_id, score: scores.length ? Math.max(...scores) : null };
+    return [{ caseId: newest.case_id, caseType: newest.case_type ?? "-", sessionId: newest.session_id, score: scores.length ? Math.max(...scores) : null }];
   }).sort((a, b) => (a.score ?? Infinity) - (b.score ?? Infinity) || a.caseId.localeCompare(b.caseId));
 }
 
