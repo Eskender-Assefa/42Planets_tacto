@@ -153,6 +153,7 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         self.c_open: float | None = None
         self.seen: dict[str, float] = {}  # supplier message_id -> when this agent first saw it
         self.shown_attachments: set[str] = set()
+        self.alt_proposed: set[tuple[str, str]] = set()  # (supplier, alternative terms) already proposed back
         self.swaps: dict[str, list[swap_engine.Swap]] = {}
         self.mandatory: dict[str, swap_engine.Swap] = {}
 
@@ -198,6 +199,7 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         self.c_open = None
         self.seen = {}
         self.shown_attachments = set()
+        self.alt_proposed = set()
         self.swaps, self.mandatory = {}, {}
         return state
 
@@ -286,6 +288,49 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         self._remember_citations(checked)
         return checked
 
+    def _take_alternative(
+        self, case: JSONObject, sid: str, te: ThreadEnvelope, status: str | None, moves_left: int
+    ) -> tuple[JSONObject, tuple[str, str]] | None:
+        """Only the main sheet of a supplier message can be accepted, but its alternatives say what
+        it will also sign - and price the terms it charges for (P10: 12 days less lead time cost
+        EUR 1.90/unit). When an alternative is clearly cheaper for us, propose exactly it back
+        instead of accepting the main sheet: no push on price, the supplier wrote those terms.
+        Once per alternative; needs a message to spare for the supplier's 'agreed'."""
+        if status == "agreed" or moves_left < 2 or te["c_true_standing"] is None:
+            return None
+        cfg = config()["alternatives"]
+        main_c = te["c_true_standing"]
+        best = None
+        for o in te["offers"][1:]:  # [0] is the main sheet
+            c = o["c_true"]
+            key = (sid, json.dumps(o["terms"], sort_keys=True))
+            if c is None or key in self.alt_proposed or not must_haves_ok(case, o["terms"], te["standard"]):
+                continue
+            if main_c - c >= max(cfg["min_gain_eur"], main_c * cfg["min_gain_pct"] / 100) and (
+                best is None or c < best[0]
+            ):
+                best = (c, o["terms"], key)
+        if best is None:
+            return None
+        c, terms, key = best
+        self.alt_proposed.add(key)
+        # exactly the supplier's terms (complete_offer would snap e.g. a 54-day lead time to an option)
+        neg = case.get("negotiable")
+        sheet: JSONObject = {k: v for k, v in terms.items() if isinstance(neg, list) and k in neg} or dict(terms)
+        price = sheet.get("unit_price")
+        body = (
+            "Dear Sir or Madam,\n\nthank you for your offer. We would like to go ahead on your alternative terms"
+            + (f" at a unit price of EUR {price:,.2f}" if isinstance(price, int | float) else "")
+            + " as attached. Please confirm so we can conclude.\n\nKind regards,\n"
+            + SIGNATURE
+        )
+        d: JSONObject = {
+            "supplier_id": sid,
+            "message": {"subject": f"Re: {case.get('title')}", "body": body, "term_sheets": [{"terms": sheet}]},
+        }
+        why = f"Its alternative costs us {_eur(main_c - c)} less than its main sheet."
+        return d, (why, "Take the supplier's own cheaper alternative instead of its main sheet.")
+
     def _neglected_thread(self, threads: Threads, live: list[str]) -> str | None:
         """The live thread whose unanswered supplier message has waited longest, if longer than
         the keep-alive limit. Arrival times are when this agent first saw each message."""
@@ -336,6 +381,9 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
                 continue
             if not must_haves_ok(case, terms, te["standard"]):
                 continue
+            proposal = self._take_alternative(case, sid, te, status, tel[sid]["moves_left"])
+            if proposal is not None:
+                return proposal
             d: JSONObject = {
                 "supplier_id": sid,
                 "message": {"action": {"type": "accept", "term_sheet_id": sheet_id}},

@@ -113,3 +113,22 @@ def test_walk_away_only_when_every_final_offer_beats_nothing(ctx):
     assert agent._rule_walk(env, tel) is None  # P08's final offer is cheaper than its alternative
     env["c_alt"] = (env["threads"][sup]["c_true_standing"] or 0) - 1  # alternative now cheaper
     assert agent._rule_walk(env, tel) == {"supplier_id": sup, "message": {"action": {"type": "walk_away"}}}
+
+
+def test_cheaper_alternative_of_a_final_offer_is_proposed_back(ctx):
+    """Floor run, P10: final offer EUR 33.70 (42-day lead) with an alternative EUR 31.80 (54 days)
+    that costs us ~EUR 60k less - propose the alternative instead of accepting the main sheet."""
+    from hollerau.negotiator import HollerauAgent
+
+    cases, pkg = ctx
+    sup, events = "sup:70410", _threads("P10final")["sup:70410"]
+    k = next(i for i, m in enumerate(events) if m.get("status") == "final_offer") + 1
+    agent = HollerauAgent(StandInClient(error=RuntimeError("no Claude for a rule move")), pkg)
+    d = agent.decide(cases["case:P10"], {sup: events[:k]})
+    msg = d["message"]
+    assert "action" not in msg, "should propose the alternative, not accept the main sheet"
+    sent = msg["term_sheets"][0]["terms"]
+    assert sent["unit_price"] == 31.8 and sent["lead_time_days"] == 54  # their terms, not snapped
+    assert msg["reasoning_audit"]["decision_source"] == "rule"
+    d2 = agent.decide(cases["case:P10"], {sup: events[:k]})  # same state again: proposed once only
+    assert d2["message"].get("action", {}).get("type") == "accept"

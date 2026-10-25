@@ -91,6 +91,11 @@ class GoalFit(TypedDict):
     cases: list[str]
 
 
+class AlternativesConfig(TypedDict):
+    min_gain_eur: float
+    min_gain_pct: float
+
+
 class StrategyConfig(TypedDict):
     segments: dict[str, SegmentConfig]
     cultures: dict[str, CultureConfig]
@@ -102,6 +107,9 @@ class StrategyConfig(TypedDict):
     swaps: SwapsConfig
     pacing: PacingConfig
     floor_pacing: FloorPacingConfig
+    alternatives: AlternativesConfig
+    lever_friction_pct: float  # % of price per changed non-price term: suppliers price our demands back in
+    friction_fields: list[str]  # the terms friction applies to (not coverage / quality)
     llm: LLMConfig
 
 

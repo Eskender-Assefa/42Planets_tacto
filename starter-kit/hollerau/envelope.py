@@ -279,18 +279,27 @@ def best_package(
     worthless to us, yet the strictest ppm was asked - and paid for in price)."""
     fields = lever_fields(case)
     combos = itertools.islice(itertools.product(*[_options(case, f) for f in fields]), MAX_COMBOS)
-    best: tuple[JSONObject, float, float] | None = None
+    # Lever friction: every non-price term we change away from the supplier's sheet gets priced
+    # back in (P10: a lead-time cut worth EUR 0.18/unit to us cost EUR 1.90/unit). Ask for a lever
+    # only when our gain beats `lever_friction_pct` of the price per unit. Choice only - the
+    # returned C stays the true cost.
+    plain = complete_offer(case, {**base, "unit_price": price})
+    units = safe_cost(case, {**plain, "unit_price": price + 1.0}, std, est) - safe_cost(case, plain, std, est)
+    friction = config()["lever_friction_pct"] / 100 * price * units if math.isfinite(units) and units > 0 else 0.0
+    friction_fields = set(config()["friction_fields"])  # not coverage or quality terms: those are ours to set
+    best: tuple[JSONObject, float, float, float] | None = None  # terms, true C, choice C, distance
     for combo in combos:
         terms = complete_offer(case, {**base, **dict(zip(fields, combo, strict=True)), "unit_price": price})
         if not must_haves_ok(case, terms, std):
             continue
         c = safe_cost(case, terms, std, est)
+        changed = sum(terms.get(f) != base.get(f) for f in fields if f in friction_fields)
+        choice = c + friction * changed
         dist = _distance(terms, base, fields)
-        if best is None or c < best[1] - 1.0 or (abs(c - best[1]) <= 1.0 and dist < best[2]):
-            best = (terms, c, dist)
+        if best is None or choice < best[2] - 1.0 or (abs(choice - best[2]) <= 1.0 and dist < best[3]):
+            best = (terms, c, choice, dist)
     if best is None:  # no levers (or none keeps the must-haves): price only
-        terms = complete_offer(case, {**base, "unit_price": price})
-        return terms, safe_cost(case, terms, std, est)
+        return plain, safe_cost(case, plain, std, est)
     return best[0], best[1]
 
 
@@ -333,14 +342,14 @@ def _relationship_target(
     low = max(price * search["low_pct_of_offer"] / 100, min(floor or 0.0, price))
     steps = max(search["steps"], 10)
     grid = [low + (price - low) * i / steps for i in range(steps + 1)]
-    best_p, best_terms, best_c = price, base, math.inf
+    best_p, best_c = price, math.inf
     for cand in grid:
         terms, c = best_package(case, base, round(cand, 2), std, est)
         if c < best_c:
-            best_p, best_terms, best_c = round(cand, 2), terms, c
+            best_p, best_c = round(cand, 2), c
     anchor = proto["segment"].get("anchor_below_target_pct", 0.0) * aggr
     ask = round(best_p * (1 - anchor / 100 * (1 - p)), 2)  # start a little below, land on it
-    terms, c = best_package(case, best_terms, ask, std, est)
+    terms, c = best_package(case, base, ask, std, est)  # friction measured against the supplier's sheet
     return ask, terms, c
 
 
@@ -481,7 +490,7 @@ def thread_envelope(
             # bottleneck / strategic suppliers hold the power: an ask far below their offer makes
             # them walk (P10 in the first practice run), whatever our should-cost says
             target_price = round(price * (1 - cap / 100), 2)
-            target_terms, ct = best_package(case, target_terms or base, target_price, std, est_for_c)
+            target_terms, ct = best_package(case, base, target_price, std, est_for_c)  # friction vs. their sheet
         c_target = _finite(ct)
         if floor is not None:
             c_floor = _finite(best_package(case, base, floor, std, est_for_c)[1])
