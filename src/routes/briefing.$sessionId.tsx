@@ -1,7 +1,11 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Shell } from "@/components/Shell";
-import { useCase, useSuppliers, supplierNames, eur } from "@/lib/command";
+import { useCase, useSuppliers } from "@/lib/command";
+import { buildBriefingScript, type BriefingMode } from "@/lib/briefing";
+import { useSpeech } from "@/hooks/useSpeech";
+import { SpeechControls } from "@/components/SpeechControls";
+import { Button } from "@/components/ui/button";
 
 export const Route = createFileRoute("/briefing/$sessionId")({
   head: ({ params }) => ({
@@ -21,24 +25,11 @@ function Briefing() {
   const { sessionId } = Route.useParams();
   const { c, logs } = useCase(sessionId);
   const suppliers = useSuppliers();
-  const [playing, setPlaying] = useState(false);
+  const [mode, setMode] = useState<BriefingMode>("summary");
   const k = c.data;
-  const last = logs.data?.at(-1);
-
-  const script = k && last
-    ? `Briefing for ${supplierNames(k, suppliers.data)}, turn ${last.turn_number}. Opening cost was ${eur(k.c_open)}; the latest supplier offer stands at ${eur(k.last_c_supplier_offer)} against a best of ${eur(k.c_best)}. ${last.strategic_intent} ${last.mathematical_justification}`
-    : "";
-
-  // Temporary browser voice until the ElevenLabs key is connected.
-  const play = () => {
-    if (!script || typeof window === "undefined") return;
-    window.speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(script);
-    u.onend = () => setPlaying(false);
-    setPlaying(true);
-    window.speechSynthesis.speak(u);
-  };
-  const stop = () => { window.speechSynthesis.cancel(); setPlaying(false); };
+  const sentences = k ? buildBriefingScript(k, logs.data ?? [], (id) => suppliers.data?.get(id)?.name ?? "", mode) : [];
+  const speech = useSpeech(sentences);
+  useEffect(() => { speech.stop(); }, [sessionId, speech.stop]);
 
   return (
     <Shell>
@@ -46,17 +37,11 @@ function Briefing() {
       <div className="mx-auto mt-8 max-w-2xl text-center">
         <div className="label-caps">D · Voice briefing room</div>
         <h1 className="mt-2 text-4xl font-semibold tracking-tight">{k ? (k.title ?? k.case_id) : "…"}</h1>
-        <button
-          onClick={playing ? stop : play}
-          disabled={!script}
-          className={`mx-auto mt-10 grid h-32 w-32 place-items-center rounded-full bg-primary num text-sm font-bold uppercase tracking-widest text-primary-foreground disabled:opacity-40 ${playing ? "live" : ""}`}
-        >
-          {playing ? "Stop" : "Play"}
-        </button>
-        <p className="panel mt-10 p-6 text-left leading-relaxed text-muted-foreground">
-          {script || (logs.isLoading || c.isLoading ? "Loading briefing…" : "No turns logged yet — start the runner.")}
-        </p>
-        <p className="mt-4 text-xs text-muted-foreground">Using the browser voice for now — ElevenLabs voice switches on once its key is added.</p>
+        <div className="my-6 flex justify-center gap-2">{(["summary", "full"] as const).map((value) => <Button key={value} variant={mode === value ? "default" : "outline"} aria-pressed={mode === value} onClick={() => setMode(value)}>{value === "summary" ? "Summary" : "Full negotiation"}</Button>)}</div>
+        {sentences.length > 0 && <SpeechControls speech={speech} large />}
+        {(logs.isError || c.isError) && <p role="alert" className="mt-6 text-destructive">Briefing data could not be loaded.</p>}
+        <ol className="mt-8 space-y-2 text-left">{sentences.map((sentence, i) => <li key={`${i}-${sentence}`}><Button variant="ghost" aria-current={speech.current === i ? "true" : undefined} onClick={() => { if (speech.supported) speech.play(i); }} className={`h-auto w-full justify-start whitespace-normal p-3 text-left leading-relaxed ${speech.current === i ? "bg-accent text-accent-foreground" : "text-muted-foreground"}`}>{sentence}</Button></li>)}</ol>
+        {!sentences.length && <p className="mt-8 text-muted-foreground">{logs.isLoading || c.isLoading ? "Loading briefing…" : "-"}</p>}
       </div>
     </Shell>
   );

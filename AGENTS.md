@@ -17,3 +17,4 @@
 - Shared telemetry components format stored values, structured term sheets, and decision labels across wave and audit views. Why: one presentation path keeps old NULL rows and new telemetry consistent.
 - Cost-bar coordinates are visual-only linear positioning of stored costs; no derived scores, savings, or cost estimates. Why: financial calculations remain backend-owned.
 - Parse mechanisms and evidence in pure telemetry helpers; share supplier-separated Recharts/shadcn price paths between audit and pitch and batch case-summary audit reads by session IDs. Why: one presentation path avoids supplier mixing and N+1 reads.
+- Build speech sentences in pure briefing helpers and reuse one browser-only speech hook across views; forward live events through the existing read-only subscription. Why: consistent narration, cancellation and queue ownership without external audio services.

@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { hollerau } from "@/integrations/hollerau/client";
 import type { AuditLog, CaseOverview, Environment, Supplier, WaveScore } from "@/integrations/hollerau/types";
@@ -21,13 +21,16 @@ export function secondsRemaining(c: CaseOverview, now = Date.now()): number | nu
   return Math.max(0, c.last_seconds_left - elapsed);
 }
 
-function useRealtime(tables: string[], keys: string[][]) {
+type LiveUpdate = { table: string; row: AuditLog | CaseOverview };
+function useRealtime(tables: string[], keys: string[][], onUpdate?: (update: LiveUpdate) => void) {
   const qc = useQueryClient();
+  const callback = useRef(onUpdate); callback.current = onUpdate;
   useEffect(() => {
     const ch = tables.reduce(
       (channel, table) =>
-        channel.on("postgres_changes", { event: "*", schema: "public", table }, () => {
+        channel.on("postgres_changes", { event: "*", schema: "public", table }, (payload) => {
           keys.forEach((k) => qc.invalidateQueries({ queryKey: k }));
+          if (payload.eventType === "INSERT" || (table === "cases" && payload.eventType === "UPDATE")) callback.current?.({ table, row: payload.new as AuditLog | CaseOverview });
         }),
       hollerau.channel(`hollerau-${Math.random().toString(36).slice(2)}`),
     );
@@ -71,8 +74,8 @@ export function supplierNames(c: CaseOverview, suppliers: Map<string, Supplier> 
   return c.supplier_ids.map((id) => suppliers?.get(id)?.name ?? id).join(", ");
 }
 
-export function useCaseOverview(environment: Environment | null, wave: number | null) {
-  useRealtime(["cases", "audit_logs"], [["hollerau"]]);
+export function useCaseOverview(environment: Environment | null, wave: number | null, onUpdate?: (update: LiveUpdate) => void) {
+  useRealtime(["cases", "audit_logs"], [["hollerau"]], onUpdate);
   const latest = useLatestEnvironment();
   const env = environment ?? latest.data ?? null;
   return {
