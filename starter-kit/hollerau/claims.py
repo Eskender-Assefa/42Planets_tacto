@@ -24,6 +24,7 @@ full run, P11: the supplier added EUR 3.00 for the lost trust; EHL sellm lost H0
 """
 
 import logging
+from collections.abc import Callable
 from typing import TypedDict
 
 from .kit import JSONObject, JSONValue
@@ -121,6 +122,7 @@ def _notice_claim(pkg: Package, case: JSONObject, supplier_id: str) -> Claim | N
     if days is None or doc is None or doc.get("supplier") != supplier_id:
         return None
     ctrs = [r for r in refs if isinstance(r, str) and r.startswith("ctr:")] if isinstance(refs, list) else []
+    ctrs += [k for k, _ in _case_facts(case, "ctr:", supplier=supplier_id) if k not in ctrs]
     for ctr in ctrs:
         fact = _fact(pkg, case, ctr)
         need = _num(fact.get("days")) if fact else None
@@ -134,19 +136,27 @@ def _notice_claim(pkg: Package, case: JSONObject, supplier_id: str) -> Claim | N
     return None
 
 
-def _should_cost_claim(pkg: Package, part_id: str, supplier_id: str) -> Claim | None:
-    sc = pkg.should_cost(part_id, supplier_id)
-    if sc is None or sc["unit_cost"] is None:
+def _should_cost_claim(pkg: Package, case: JSONObject, part_id: str, supplier_id: str) -> Claim | None:
+    in_case = _case_facts(case, "cost:", part=part_id)
+    if in_case:
+        ref, fact = in_case[-1]
+        cost = _num(fact.get("unit_cost"))
+    else:
+        sc = pkg.should_cost(part_id, supplier_id)
+        ref, cost = (sc["id"], sc["unit_cost"]) if sc else ("", None)
+    if cost is None or not ref:
         return None
-    sentence = (
-        f"Our bottom-up estimate of the full cost is EUR {sc['unit_cost']:.2f} per unit before margin ({sc['id']})."
-    )
-    return {"kind": "should_cost", "sentence": sentence, "refs": [sc["id"]], "price": float(sc["unit_cost"])}
+    sentence = f"Our bottom-up estimate of the full cost is EUR {cost:.2f} per unit before margin ({ref})."
+    return {"kind": "should_cost", "sentence": sentence, "refs": [ref], "price": float(cost)}
 
 
 def _volume_claim(pkg: Package, case: JSONObject, part_id: str) -> Claim | None:
-    rows = pkg._query("SELECT id FROM forecasts WHERE part_id = ? ORDER BY snapshot_month DESC LIMIT 1", (part_id,))
-    ref = rows[0]["id"] if rows else None
+    in_case = _case_facts(case, "fc:", part=part_id)
+    if in_case:
+        ref: JSONValue = in_case[-1][0]
+    else:
+        rows = pkg._query("SELECT id FROM forecasts WHERE part_id = ? ORDER BY snapshot_month DESC LIMIT 1", (part_id,))
+        ref = rows[0]["id"] if rows else None
     fact = _fact(pkg, case, ref) if isinstance(ref, str) else None
     change, vol = (_num(fact.get("change_pct")), _num(fact.get("volume_per_year"))) if fact else (None, None)
     if not isinstance(ref, str) or change is None or change <= 0:
@@ -159,22 +169,42 @@ def _volume_claim(pkg: Package, case: JSONObject, part_id: str) -> Claim | None:
     return {"kind": "volume", "sentence": sentence, "refs": [ref], "price": None}
 
 
+def _case_facts(case: JSONObject, prefix: str, **match: str) -> list[tuple[str, dict[str, JSONValue]]]:
+    """(id, fact) of the case's own facts with this ID prefix whose fields equal `match`, newest ID
+    last. The final brings new suppliers whose records may exist only in the case file."""
+    own = case.get("facts")
+    if not isinstance(own, dict):
+        return []
+    found = [
+        (k, v)
+        for k, v in own.items()
+        if k.startswith(prefix) and isinstance(v, dict) and all(v.get(f) == want for f, want in match.items())
+    ]
+    return sorted(found, key=lambda kv: kv[0])
+
+
 def _scorecard_claim(pkg: Package, case: JSONObject, supplier_id: str, quality: bool) -> Claim | None:
-    card = pkg.supplier_bundle(supplier_id, None)["latest_scorecard"]
-    fact = _fact(pkg, case, card["id"]) if card else None
-    if card is None or fact is None:
-        return None
+    in_case = _case_facts(case, "sc:", supplier=supplier_id)
+    if in_case:
+        ref, fact = in_case[-1]
+        quarter = str(fact.get("quarter") or ref.split("@")[-1])
+    else:
+        card = pkg.supplier_bundle(supplier_id, None)["latest_scorecard"]
+        found = _fact(pkg, case, card["id"]) if card else None
+        if card is None or found is None:
+            return None
+        ref, fact, quarter = card["id"], found, str(card["quarter"])
     if quality:
         ppm = _num(fact.get("ppm"))
         if not ppm:
             return None
-        sentence = f"Your rolling twelve-month defect rate in {card['quarter']} was {ppm:.0f} ppm ({card['id']})."
-        return {"kind": "quality", "sentence": sentence, "refs": [card["id"]], "price": None}
+        sentence = f"Your rolling twelve-month defect rate in {quarter} was {ppm:.0f} ppm ({ref})."
+        return {"kind": "quality", "sentence": sentence, "refs": [ref], "price": None}
     otd = _num(fact.get("otd_pct"))
     if otd is None or otd >= OTD_WEAK_PCT:
         return None
-    sentence = f"Your rolling twelve-month on-time delivery in {card['quarter']} was {otd:.1f} % ({card['id']})."
-    return {"kind": "delivery", "sentence": sentence, "refs": [card["id"]], "price": None}
+    sentence = f"Your rolling twelve-month on-time delivery in {quarter} was {otd:.1f} % ({ref})."
+    return {"kind": "delivery", "sentence": sentence, "refs": [ref], "price": None}
 
 
 def _history_claim(pkg: Package, part_id: str, supplier_id: str) -> Claim | None:
@@ -201,22 +231,25 @@ def build_claims(pkg: Package | None, case: JSONObject, supplier_id: str) -> lis
     parts = case.get("parts")
     first = str(parts[0]) if isinstance(parts, list) and parts else None
     part_id = first if isinstance(parts, list) and len(parts) == 1 else None
+    steps: list[Callable[[], list[Claim | None]]] = []
+    if quality:
+        steps.append(lambda: [_scorecard_claim(pkg, case, supplier_id, quality=True)])
+    if first:
+        steps.append(lambda: list(_index_claims(pkg, case, first)))
+    steps.append(lambda: [_notice_claim(pkg, case, supplier_id)])
+    if part_id:
+        steps.append(lambda: [_should_cost_claim(pkg, case, part_id, supplier_id)])
+        steps.append(lambda: [_volume_claim(pkg, case, part_id)])
+    if not quality:
+        steps.append(lambda: [_scorecard_claim(pkg, case, supplier_id, quality=False)])
+    if part_id:
+        steps.append(lambda: [_history_claim(pkg, part_id, supplier_id)])
     out: list[Claim | None] = []
-    try:
-        if quality:
-            out.append(_scorecard_claim(pkg, case, supplier_id, quality=True))
-        if first:
-            out += _index_claims(pkg, case, first)
-        out.append(_notice_claim(pkg, case, supplier_id))
-        if part_id:
-            out.append(_should_cost_claim(pkg, part_id, supplier_id))
-            out.append(_volume_claim(pkg, case, part_id))
-        if not quality:
-            out.append(_scorecard_claim(pkg, case, supplier_id, quality=False))
-        if part_id:
-            out.append(_history_claim(pkg, part_id, supplier_id))
-    except PackageError as e:
-        log.warning("claims for %s incomplete: %s", supplier_id, e)
+    for step in steps:  # each kind on its own: a supplier new to our data must not cost the rest
+        try:
+            out += step()
+        except (PackageError, KeyError, TypeError, ValueError) as e:
+            log.warning("a claim for %s skipped: %s", supplier_id, e)
     claims = [c for c in out if c is not None]
     for c in claims:  # never an ID the arena does not know: it would be 'contradicted'
         if not all(pkg.is_citable(r) or _fact(pkg, case, r) for r in c["refs"]):

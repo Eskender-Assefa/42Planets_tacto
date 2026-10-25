@@ -34,6 +34,7 @@ from .envelope import (
     Envelope,
     ThreadEnvelope,
     coverage,
+    distressed,
     envelope,
     owner_run,
     price_for_cost,
@@ -232,6 +233,14 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
             "claims": {sid: build_claims(self.pkg, case, sid) for sid in suppliers},
             "labels": labels,
         }
+        facts = case.get("facts")
+        for ref, fact in facts.items() if isinstance(facts, dict) else []:
+            # the final's new suppliers: news that exists only in the case file joins the candidates
+            if ref.startswith("news:") and isinstance(fact, dict) and fact.get("supplier") in state["briefs"]:
+                brief = state["briefs"][str(fact["supplier"])]
+                if not any(ref in i["refs"] for i in brief["items"]):
+                    sentence = f"{fact.get('date', '')}: {fact.get('headline', '')} ({ref})."
+                    brief["items"].append({"kind": "news", "sentence": sentence, "refs": [ref], "favourable": False})
         self.case_brief = str(super().prepare(case))  # type: ignore[no-untyped-call]
         self.cited = set()
         self.cited_offers = set()
@@ -811,6 +820,11 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
             ]
             if owner_run(threads[sid]):
                 out.append("OWNER-RUN supplier: it values fast payment - keep the TARGET's short payment term.")
+            elif distressed(self.pkg, sid):
+                out.append(
+                    "CASH-SHORT supplier (Sunday release: credit cut / lost customer / payment letter): fast payment "
+                    "and firm volume are worth more to it than price - keep the TARGET's short payment term."
+                )
             paced = self._min_counter_c(case, threads[sid], te)
             if paced is not None and te["target_terms"] is not None and te["c_standing"] is not None:
                 floor, prev = paced

@@ -10,8 +10,13 @@ State on 2026-10-25 (Sunday). Code freeze **13:00** - submit the final commit ha
   leaderboard 75.5, rank 11); P11 .314, P08 .614-.635 after reciprocity + swap guard.
   Quarantine switches (`rule_accept`, `mindset_inference`) all ON - final offers must be accepted
   (silenced: 4 of 5 suppliers walked).
-- Open (presentation, 08:30): final uses NEW suppliers (claims break for unknown suppliers - fix
-  pending); Sunday market data not yet downloaded (`uv run arena data`).
+- `post-release` (on top of post-pacing): Sunday data downloaded (`data/release-sunday`; index
+  series unchanged at 2026-09); cash-short suppliers in the release (credit cut / lost customer /
+  payment letter: Vrbensky, Pfaffenreuth ask 10 days) get 10-day payment in non-relationship cases;
+  claims built per kind (an unknown supplier no longer loses all claims) and from the case file's
+  own facts (sc / ctr+doc / fc / cost / news) - the final uses new suppliers (presentation).
+- P11 quality trade not built: its terms (1500 ppm, EUR 500 chargeback) already are the best
+  package (C_best = same terms at 43.90); the gap is price only.
 - `post-winners-fix` is the final candidate: `post-winners` (claims.py + owner payment + capacity
   lead time; see docs/winners_analysis) plus two claim fixes learned live - index claims only from
   the part's cost drivers, recency counted from the newest month of all index data (energy index

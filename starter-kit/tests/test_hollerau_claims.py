@@ -264,3 +264,56 @@ def test_concession_path_holds_against_a_stonewall(world):
     te = envelope(case, {sup: thread}, [sup], agent.state["protocols"], pkg, agent.state["countries"])["threads"][sup]
     floor, prev = agent._min_counter_c(case, thread, te)
     assert abs(floor - safe_cost(case, prev, te["standard"])) < 0.01
+
+
+def test_cash_short_suppliers_from_the_sunday_release_get_short_payment(world):
+    """Sunday release: Vrbensky (credit cut, asks 10 days) and Pfaffenreuth (lost customer, asks 10
+    days) are short of cash; Kraslin (short-time work) and Steinfelder (steel letter) are not."""
+    from hollerau.envelope import distressed, owner_payment_terms
+
+    cases, pkg = world
+    if getattr(pkg.data, "release", None) is None:
+        pytest.skip("Sunday release not unpacked (uv run arena data)")
+    assert distressed(pkg, "sup:70170") and distressed(pkg, "sup:70190")
+    assert not distressed(pkg, "sup:70270") and not distressed(pkg, "sup:70340")
+    case = cases["case:P01"]  # payment_days negotiable
+    days = sorted(o for o in case["term_options"]["payment_days"] if isinstance(o, int))
+    terms = {"unit_price": 130.0, "payment_days": 90, "effective_date": "2027-04-01"}
+    out = owner_payment_terms(case, terms, [], relationship=False, distress=True)
+    assert out["payment_days"] == next(d for d in days if d >= 10)
+    assert owner_payment_terms(case, terms, [], relationship=True, distress=True)["payment_days"] == 90
+
+
+def test_new_supplier_from_the_final_still_gets_claims_and_a_move(world):
+    """Presentation: 'The Live Final uses new suppliers that are not in practice.' A supplier our
+    data does not know must cost no claim kind its records in the case file support, and the turn
+    must not fall to the safety net."""
+    import copy
+
+    from hollerau.claims import build_claims
+
+    cases, pkg = world
+    new = "sup:79999"
+    case = copy.deepcopy(cases["case:P11"])  # a quality case: before, an unknown supplier lost every claim
+    case["suppliers"] = [new]
+    case["trigger_doc"] = "doc:20261024-79999-F01"
+    case["facts"] = {
+        "doc:20261024-79999-F01": {"supplier": new, "days": 40, "type": "letter", "title": "Price adjustment"},
+        "ctr:4600079999": {"supplier": new, "days": 90},
+        "sc:79999@2026Q3": {"supplier": new, "quarter": "2026Q3", "otd_pct": 71.0, "ppm": 3100},
+        "fc:310020@2026-10": {"part": "part:310020", "change_pct": 8.0, "volume_per_year": 16000},
+        "news:20261024-F1": {"supplier": new, "date": "2026-10-24", "headline": "New supplier loses an order"},
+    }
+    kinds = {c["kind"]: c for c in build_claims(pkg, case, new)}
+    assert {"quality", "notice", "volume"} <= set(kinds), kinds
+    assert "3100 ppm (sc:79999@2026Q3)" in kinds["quality"]["sentence"]
+    assert "40 days of notice" in kinds["notice"]["sentence"]
+    events = _threads("P11")["sup:70140"][:1]
+    opening = [{**m, "from": "sales@79999", "thread_id": "thread:P11:79999"} for m in events]
+    agent = HollerauAgent(
+        StandIn(_reply(new, "Thank you.", 43.0, {"ppm_commitment": "1500", "chargeback_eur_per_complaint": "500"})), pkg
+    )
+    d = agent.decide(case, {new: opening})
+    audit = d["message"]["reasoning_audit"]
+    assert audit["decision_source"] in ("claude", "fallback") and "Internal error" not in audit["observed_barrier"]
+    assert "news:20261024-F1" in agent._news_items(new)

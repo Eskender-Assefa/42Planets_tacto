@@ -118,6 +118,9 @@ class OwnerPaymentConfig(TypedDict):
     enabled: bool
     days: int  # owner-run suppliers: target payment term (the shortest option >= this)
     skip_relationship: bool  # keep the engine's payment choice in stabilise / secure_supply cases
+    distress_days: int  # suppliers the Sunday release shows short of cash: the shortest option >= this
+    distress_topics: list[str]  # release news topics that mean cash trouble
+    letter_markers: list[str]  # words in a release letter's subject that mean cash trouble
 
 
 class CapacityRespectConfig(TypedDict):

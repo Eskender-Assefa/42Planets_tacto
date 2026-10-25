@@ -287,22 +287,44 @@ def owner_run(events: list[Message]) -> bool:
     return any(m.get("from") != "buyer" and str(m.get("from_name") or "").lower().startswith("owner") for m in events)
 
 
+def distressed(pkg: Package | None, supplier_id: str) -> bool:
+    """The Sunday release shows the supplier short of cash: a credit cut or a lost customer in the
+    news, or a letter about payment terms / liquidity (Vrbensky and Pfaffenreuth ask for 10 days)."""
+    if pkg is None:
+        return False
+    cfg = config()["owner_payment"]
+    for row in pkg.release_rows(supplier_id):
+        if row.get("topic") in cfg["distress_topics"]:
+            return True
+        subject = (row.get("subject") or "").lower()
+        if row.get("table") == "documents" and any(m in subject for m in cfg["letter_markers"]):
+            return True
+    return False
+
+
 def owner_payment_terms(
-    case: JSONObject, terms: JSONObject, events: list[Message], relationship: bool = False
+    case: JSONObject,
+    terms: JSONObject,
+    events: list[Message],
+    relationship: bool = False,
+    distress: bool = False,
 ) -> JSONObject:
     """Owner-run suppliers value fast payment far above our interest cost (docs/winners_analysis:
-    all three EHL winners offered them 10-14 days). The sheet's payment term becomes the shortest
+    all three EHL winners offered them 10-14 days); so do suppliers the Sunday release shows short
+    of cash (`distress`: they ask for 10 days). The sheet's payment term becomes the shortest
     option at or above the configured days; other suppliers keep the engine's choice. Not in
     relationship cases: there our own maths run measured 90 days ahead (P01 0.78 vs 0.57)."""
     cfg = config()["owner_payment"]
     neg = case.get("negotiable")
-    if not cfg["enabled"] or (relationship and cfg["skip_relationship"]) or not owner_run(events):
+    owner = owner_run(events)
+    if not cfg["enabled"] or (relationship and cfg["skip_relationship"]) or not (owner or distress):
         return terms
     if not isinstance(neg, list) or "payment_days" not in neg:
         return terms
     options = _options(case, "payment_days")
     days = sorted(int(o) for o in options if isinstance(o, int | float) and not isinstance(o, bool))
-    fit = [d for d in days if d >= cfg["days"]]
+    want = cfg["distress_days"] if distress and not owner else cfg["days"]
+    fit = [d for d in days if d >= want]
     if not fit:
         return terms
     return complete_offer(case, {**terms, "payment_days": fit[0]})
@@ -540,7 +562,7 @@ def thread_envelope(
             target_price = round(price * (1 - cap / 100), 2)
             target_terms, ct = best_package(case, base, target_price, std, est_for_c)  # friction vs. their sheet
         if target_terms is not None:
-            owner_terms = owner_payment_terms(case, target_terms, events, relationship)
+            owner_terms = owner_payment_terms(case, target_terms, events, relationship, distressed(pkg, supplier_id))
             if owner_terms != target_terms:
                 target_terms, ct = owner_terms, safe_cost(case, owner_terms, std, est_for_c)
         c_target = _finite(ct)
