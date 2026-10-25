@@ -58,7 +58,7 @@
     "_default": {"label": "Neutral / Professional", "guidance": "Clear, polite, professional English."}
   },
   "country_cost_factor": {"DE": 1.0, "AT": 1.05, "CH": 1.05, "CZ": 0.825, "PL": 0.825, "HU": 0.825, "TR": 0.75, "CN": 0.7},
-  "full_cost_estimate": {"use_lower_bound": true},
+  "full_cost_estimate": {"_comment": "Supplier full cost = should_cost x factor. 0.985 backed out of every supplier-health charge the arena revealed (P01/P02/P03, 7 deals, +/-0.3 %); the old lower bound (x0.95) under-priced the charge (P02 paid EUR 59.7k / 108.8k).", "use_lower_bound": false, "factor": 0.985},
   "relationship_price_search": {"low_pct_of_offer": 85.0, "steps": 300},
   "telemetry": {"stalled_velocity_pct": 0.1, "yielding_velocity_pct": 0.5},
   "leverage": {

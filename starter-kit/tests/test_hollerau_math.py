@@ -79,15 +79,20 @@ def test_progress_is_monotone_and_clock_aware(p02):
     assert progress(case, events[:1], 90.0) == 1.0  # at the close-before-cap mark: land
 
 
-def test_stabilise_target_never_below_floor_estimate(p02, pkg):
+def test_stabilise_target_minimises_true_cost(p02, pkg):
+    """Strategic target = lowest true C (price saving vs. supplier-health charge, priced with the
+    calibrated full cost) - no clamp at a should-cost floor: P02 accepted 357.99 below it."""
+    from hollerau.profiles import config
+
     case, events = p02
     for k in (1, 5, 9):
         env = envelope(case, {SUP: events[:k]}, [SUP], {SUP: protocol("stabilise", "DE")}, pkg, {SUP: "DE"})
         t = env["threads"][SUP]
-        assert t["price_floor_est"] is not None and t["target_price"] is not None
-        anchor = config()["segments"]["stabilise"]["anchor_below_target_pct"]
-        assert t["target_price"] >= min(t["price_floor_est"], t["standing_price"]) * (1 - anchor / 100) - 0.01
-        assert t["target_price"] <= t["standing_price"]
+        low = config()["relationship_price_search"]["low_pct_of_offer"] / 100
+        assert (
+            t["target_price"] is not None
+            and low * t["standing_price"] - 0.01 <= t["target_price"] <= t["standing_price"]
+        )
         assert t["c_target"] is not None and t["c_target"] <= t["c_true_standing"]
     assert env["c_open"] == pytest.approx(safe_cost(case, events[0]["term_sheets"][0]["terms"], standard_terms(events)))
 

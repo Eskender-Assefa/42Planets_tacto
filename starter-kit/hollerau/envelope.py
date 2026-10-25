@@ -223,6 +223,7 @@ def estimate_supplier(
     if sc["supplier_id"] is None:  # generic estimate: German cost base -> supplier's country
         factors = cfg["country_cost_factor"]
         full *= factors.get(country or "", 1.0) / factors.get(sc["cost_base"] or "DE", 1.0)
+    full *= cfg["full_cost_estimate"]["factor"]
     if cfg["full_cost_estimate"]["use_lower_bound"] and sc["confidence_pct"]:
         full *= 1 - sc["confidence_pct"] / 100
     buyer = case.get("buyer")
@@ -339,7 +340,9 @@ def _relationship_target(
     """Price grid search for the lowest true C (price saving vs. supplier-health charge), never
     below the supplier's estimated floor: a price it cannot accept is no target at all."""
     search = config()["relationship_price_search"]
-    low = max(price * search["low_pct_of_offer"] / 100, min(floor or 0.0, price))
+    # No clamp at a should-cost 'floor': strategic suppliers do accept below it (P02 took 357.99);
+    # the supplier-health charge - now priced with the calibrated full cost - sets the optimum.
+    low = price * search["low_pct_of_offer"] / 100
     steps = max(search["steps"], 10)
     grid = [low + (price - low) * i / steps for i in range(steps + 1)]
     best_p, best_c = price, math.inf

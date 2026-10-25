@@ -55,6 +55,7 @@ class PriceSearchConfig(TypedDict):
 
 class FullCostConfig(TypedDict):
     use_lower_bound: bool
+    factor: float  # full cost = should_cost x factor (calibrated on revealed charges)
 
 
 class LeverageConfig(TypedDict):

@@ -66,13 +66,19 @@ def test_horizon_beyond_need_is_a_free_chip(ctx):
     assert chip and chip[0]["value"] == 36 and abs(chip[0]["give_cost_eur"]) <= 1.0 and chip[0]["cut_pct"] > 0
 
 
-def test_stalled_supplier_gets_the_mandatory_trade_first(ctx):
+def test_requested_lever_gets_the_mandatory_trade_first(ctx):
+    """P08: Donautal asks for the index clause - the matching trade goes out first, audited."""
     from hollerau.negotiator import HollerauAgent
 
     cases, pkg = ctx
-    sup = "sup:70510"
-    events = _threads("P02")[sup][:5]  # Nordmark stalls (0.1 % steps)
-    d = HollerauAgent(StandInClient(_reply(price=364.0, payment="90")), pkg).decide(cases["case:P02"], {sup: events})
+    sup = "sup:70710"
+    events = _threads("P08")[sup][:3]
+    reply = _reply(price=5.40, payment="90")
+    reply["decision"]["supplier_id"] = sup
+    reply["decision"]["term_sheets"] = [
+        {"unit_price": 5.40, "payment_days": "90", "index_clause": "none", "contract_months": "24"}
+    ]
+    d = HollerauAgent(StandInClient(reply), pkg).decide(cases["case:P08"], {sup: events})
     msg = d["message"]
     assert "swap offered:" in msg["reasoning_audit"]["mathematical_justification"]
     assert msg["term_sheets"][0]["terms"]["unit_price"] < events[-1]["term_sheets"][0]["terms"]["unit_price"]
