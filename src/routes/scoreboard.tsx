@@ -30,8 +30,9 @@ function Scoreboard() {
   const scores = bestCaseScores(query.data ?? []);
   const plotted = scores.filter((c): c is typeof c & { score: number } => c.score != null).map((c) => ({ ...c, label: `${c.caseId} · ${c.caseType}`, percent: c.score * 100 }));
   const types = [...new Set((query.data ?? []).map((c) => c.case_type ?? "-"))].sort();
-  const colors = ["var(--chart-1)", "var(--chart-2)", "var(--info)", "var(--chart-3)", "var(--chart-4)", "var(--chart-5)"];
-  const colorFor = (type: string) => colors[types.indexOf(type) % colors.length];
+  const colors = ["var(--chart-1)", "var(--chart-2)", "var(--info)", "var(--chart-3)", "var(--chart-4)", "var(--chart-5)", "var(--chart-6)", "var(--chart-7)"];
+  const categories = ["bundling", "capacity", "price_increase", "quality", "raw_material", "renewal", "rfq"];
+  const colorFor = (type: string) => colors[categories.includes(type) ? categories.indexOf(type) : 7];
   const mean = plotted.length ? plotted.reduce((sum, c) => sum + c.percent, 0) / plotted.length : null;
 
   return (

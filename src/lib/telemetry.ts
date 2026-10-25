@@ -103,5 +103,5 @@ export function finalDealTerms(c: CaseOverview, logs: AuditLog[]) {
   if (c.status !== "deal") return null;
   const turns = orderedTurns(logs.filter((l) => !c.deal_supplier_id || l.supplier_id === c.deal_supplier_id));
   const last = turns.at(-1);
-  return last?.action === "accept" ? last.supplier_terms : last?.proposed_terms ?? null;
+  return last?.action === "accept" ? last.supplier_terms ?? null : turns.slice().reverse().find((l) => l.proposed_terms != null)?.proposed_terms ?? null;
 }
