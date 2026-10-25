@@ -143,7 +143,7 @@ def _fixture(name):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def test_final_offer_is_accepted_not_pushed(p02):
+def test_final_offer_is_accepted_not_pushed(p02, unquarantined):
     """Regression, practice run 1: P10 countered a final_offer and the supplier walked."""
     _, _, pkg = p02
     cases = {c["case_id"]: c for c in json.loads(CASES.read_text(encoding="utf-8"))}
@@ -242,3 +242,29 @@ def test_final_offer_accept_names_the_main_sheet(p02):
     )
     main = events[k - 1]["term_sheets"][0]["term_sheet_id"]
     assert d["message"]["action"] == {"type": "accept", "term_sheet_id": main}
+
+
+def test_quarantine_leaves_final_offer_and_mindset_to_claude(p02, monkeypatch):
+    """Quarantine (rule_accept off, mindset_inference off): a final offer is not auto-accepted -
+    Claude is asked; the prompt carries no inferred mindset and rule 6 reads plain. (on_final_offer
+    itself stays on in config: silencing it lost 4 of 5 deals live.)"""
+    from hollerau.negotiator import RULE_6_MINDSET, system_prompt
+    from hollerau.profiles import config
+
+    for key in ("on_agreed", "on_target", "on_final_offer"):
+        monkeypatch.setitem(config()["rule_accept"], key, False)
+    monkeypatch.setitem(config()["mindset_inference"], "enabled", False)
+    _, _, pkg = p02
+    cases = {c["case_id"]: c for c in json.loads(CASES.read_text(encoding="utf-8"))}
+    events = _fixture("P10")["sup:70410"]
+    k = next(i for i, m in enumerate(events) if m.get("status") == "final_offer") + 1
+    reply = _reply(action="accept")
+    reply["decision"]["supplier_id"] = "sup:70410"
+    client = StandInClient(reply)
+    agent = HollerauAgent(client, pkg)
+    d = agent.decide(cases["case:P10"], {"sup:70410": events[:k]})
+    assert client.calls, "Claude must decide when the rule accept is silenced"
+    prompt = client.calls[0]["messages"][0]["content"]
+    assert "mindset" not in prompt and RULE_6_MINDSET not in system_prompt()
+    assert d["message"]["action"]["type"] == "accept"  # Claude may still take a stated final offer
+    assert d["message"]["reasoning_audit"]["decision_source"] == "claude"

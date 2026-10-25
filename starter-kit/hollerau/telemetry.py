@@ -14,7 +14,7 @@ from .envelope import safe_cost, supplier_sheets
 from .kit import JSONObject, Message, latest, moves_left, standard_terms
 from .profiles import config
 
-Mindset = Literal["opening", "yielding", "stalled", "critical_breakoff"]
+Mindset = Literal["opening", "yielding", "stalled", "critical_breakoff", "unread"]  # unread: quarantined
 CRITICAL_STATUSES = frozenset({"final_offer", "walked_away", "no_bid"})
 
 
@@ -64,7 +64,9 @@ def telemetry(case: JSONObject, supplier_id: str, events: list[Message], c_open:
 
     cfg = config()["telemetry"]
     mindset: Mindset
-    if status_s in CRITICAL_STATUSES:
+    if not config()["mindset_inference"]["enabled"]:
+        mindset = "unread"
+    elif status_s in CRITICAL_STATUSES:
         mindset = "critical_breakoff"
     elif velocity is None:
         mindset = "opening"

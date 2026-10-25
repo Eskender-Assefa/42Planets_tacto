@@ -115,7 +115,7 @@ def test_walk_away_only_when_every_final_offer_beats_nothing(ctx):
     assert agent._rule_walk(env, tel) == {"supplier_id": sup, "message": {"action": {"type": "walk_away"}}}
 
 
-def test_cheaper_alternative_of_a_final_offer_is_proposed_back(ctx):
+def test_cheaper_alternative_of_a_final_offer_is_proposed_back(ctx, unquarantined):
     """Floor run, P10: final offer EUR 33.70 (42-day lead) with an alternative EUR 31.80 (54 days)
     that costs us ~EUR 60k less - propose the alternative instead of accepting the main sheet."""
     from hollerau.negotiator import HollerauAgent

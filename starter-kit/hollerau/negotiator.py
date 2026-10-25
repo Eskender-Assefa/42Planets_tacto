@@ -120,6 +120,17 @@ Rules:
    not copy."""
 
 
+RULE_6_MINDSET = """6. Read the supplier: stalled -> change the package, not just the price; final_offer or critical ->
+   one last small push at most, then close; yielding -> keep your concessions small."""
+RULE_6_PLAIN = """6. Judge each supplier move on its terms and the engine's numbers; a final_offer is the supplier's
+   stated last word - accept it, or push on only when the gap to TARGET is worth the risk of a walk."""
+
+
+def system_prompt() -> str:
+    """SYSTEM, with rule 6 free of the inferred supplier mindset while that is quarantined."""
+    return SYSTEM if config()["mindset_inference"]["enabled"] else SYSTEM.replace(RULE_6_MINDSET, RULE_6_PLAIN)
+
+
 class CaseState(TypedDict):
     case_id: str
     protocols: dict[str, Protocol]
@@ -510,10 +521,18 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         alt, c_open = env["c_alt"], env["c_open"]
         priced = [x["c_true_standing"] for x in env["threads"].values() if x["c_true_standing"] is not None]
         cheapest_live = min(priced) if priced else None
+        switch = config()["rule_accept"]  # quarantine: a silenced trigger leaves the move to Claude
         for sid, te in env["threads"].items():
             status = tel[sid]["status"]
             sheet_id, terms, c = te["sheet_id"], te["standing_terms"], te["c_true_standing"]
             if sheet_id is None or c is None:
+                continue
+            last_move = tel[sid]["moves_left"] <= 1  # the hard boundary is a safety close: never silenced
+            silenced = {
+                "agreed": not switch["on_agreed"],
+                "final_offer": not switch["on_final_offer"],
+            }.get(status or "", not switch["on_target"])
+            if silenced and not last_move:
                 continue
             target = te["c_target"]
             if status == "final_offer":
@@ -602,7 +621,7 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         cfg = config()["llm"]
         t0 = time.monotonic()
         system: list[BetaTextBlockParam] = [
-            {"type": "text", "text": SYSTEM},
+            {"type": "text", "text": system_prompt()},
             {"type": "text", "text": self.case_brief, "cache_control": {"type": "ephemeral"}},  # per case
         ]
         prompt = self._render(case, threads, env, tel, secs)
@@ -681,9 +700,14 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
                 *([block] if (block := self._swaps_block(sid)) else []),
                 "LEVERS (EUR change in our C vs. their standing sheet, same price; negative = saves us): "
                 + "; ".join(f"{lv['field']}={option_label(lv['value'])}: {lv['delta_eur']:+,.0f}" for lv in levers),
-                f"TELEMETRY: status {t['status']}, mindset {t['mindset']}, concession velocity "
-                f"{t['concession_velocity']}% of C_open per round, {t['moves_left']} messages left, "
-                f"claim verdicts so far {json.dumps(t['claims'])}.",
+                (
+                    f"TELEMETRY: status {t['status']}, mindset {t['mindset']}, concession velocity "
+                    f"{t['concession_velocity']}% of C_open per round, {t['moves_left']} messages left, "
+                    f"claim verdicts so far {json.dumps(t['claims'])}."
+                    if config()["mindset_inference"]["enabled"]
+                    else f"TELEMETRY: status {t['status']}, {t['moves_left']} messages left, "
+                    f"claim verdicts so far {json.dumps(t['claims'])}."
+                ),
             ]
             if owner_run(threads[sid]):
                 out.append("OWNER-RUN supplier: it values fast payment - keep the TARGET's short payment term.")
@@ -780,7 +804,8 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
             self.swaps[sid] = found
             sent = sum(m.get("from") == "buyer" for m in events)
             asked = swap_engine.wants(events, cfg, last_n=1) & {s["field"] for s in found}
-            if swap_engine.stalled(tel[sid]["concession_velocity"], sent, cfg) or (sent >= 1 and asked):
+            read = config()["mindset_inference"]["enabled"]  # quarantine: no stall-triggered trades
+            if (read and swap_engine.stalled(tel[sid]["concession_velocity"], sent, cfg)) or (sent >= 1 and asked):
                 self.mandatory[sid] = next((s for s in found if s["field"] in asked), found[0])
 
     @staticmethod
@@ -862,7 +887,7 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
             c, target = te["c_true_standing"], te["c_target"]
             late = (
                 t["mindset"] in ("stalled", "critical_breakoff")
-                or t["status"] == "agreed"
+                or t["status"] in ("agreed", "final_offer")  # stated facts: Claude may take them
                 or t["moves_left"] <= 1
                 or env["progress"] >= 0.85
             )

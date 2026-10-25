@@ -106,7 +106,7 @@ def test_leverage_target_moves_toward_landing(p02):
     assert early["supplier_estimate"] is None and early["penalty_at_offer"] == 0.0
 
 
-def test_telemetry_reads_the_supplier(p02):
+def test_telemetry_reads_the_supplier(p02, unquarantined):
     case, events = p02
     first = telemetry(case, SUP, events[:1], None)
     assert first["mindset"] == "opening" and first["concession_velocity"] is None

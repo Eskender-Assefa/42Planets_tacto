@@ -125,6 +125,16 @@ class CapacityRespectConfig(TypedDict):
     fields: list[str]  # capacity cases: never ask a value below the supplier's own for these
 
 
+class RuleAcceptConfig(TypedDict):
+    on_agreed: bool  # Python accepts when the supplier agreed to our sheet
+    on_target: bool  # ... when its standing sheet meets our target
+    on_final_offer: bool  # ... when it declared its final offer (cheapest live)
+
+
+class MindsetConfig(TypedDict):
+    enabled: bool  # false: no inferred supplier mindset anywhere (quarantine)
+
+
 class StrategyConfig(TypedDict):
     segments: dict[str, SegmentConfig]
     cultures: dict[str, CultureConfig]
@@ -142,6 +152,8 @@ class StrategyConfig(TypedDict):
     claims: ClaimsConfig
     owner_payment: OwnerPaymentConfig
     capacity_respect: CapacityRespectConfig
+    rule_accept: RuleAcceptConfig
+    mindset_inference: MindsetConfig
     lever_friction_pct: float  # % of price per changed non-price term: suppliers price our demands back in
     friction_fields: list[str]  # the terms friction applies to (not coverage / quality)
     llm: LLMConfig

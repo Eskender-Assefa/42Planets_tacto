@@ -16,6 +16,16 @@ class Clock:
 
 
 @pytest.fixture
+def unquarantined(monkeypatch):
+    """Tests of the quarantined mechanisms (rule accepts, inferred mindset) switch them back on."""
+    from hollerau.profiles import config
+
+    for key in ("on_agreed", "on_target", "on_final_offer"):
+        monkeypatch.setitem(config()["rule_accept"], key, True)
+    monkeypatch.setitem(config()["mindset_inference"], "enabled", True)
+
+
+@pytest.fixture
 def sim():
     """arena-sim on a free local port: (base_url, Sim, Clock). Event code 'sim'."""
     pytest.importorskip("fastapi")
