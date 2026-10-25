@@ -131,3 +131,12 @@
 @media (prefers-reduced-motion: reduce) {
   .live { animation: none; }
 }
+
+@media print {
+  @page { size: A4 landscape; margin: 12mm; }
+  body:has(.pitch-page) { --background: oklch(1 0 0); --foreground: oklch(0.2 0 0); --card: oklch(1 0 0); --muted-foreground: oklch(0.4 0 0); --border: oklch(0.8 0 0); --primary: oklch(0.5 0.15 50); --info: oklch(0.45 0.12 240); --success: oklch(0.45 0.13 150); --warning: oklch(0.5 0.1 85); background-image: none; }
+  body:has(.pitch-page)::before, .pitch-back { display: none; }
+  .pitch-page { max-width: none; padding: 0; }
+  .pitch-turn, .pitch-terms, .negotiation-path { break-inside: avoid; }
+  .pitch-page * { print-color-adjust: exact; }
+}
