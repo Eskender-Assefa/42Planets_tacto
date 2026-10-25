@@ -317,3 +317,24 @@ def test_new_supplier_from_the_final_still_gets_claims_and_a_move(world):
     audit = d["message"]["reasoning_audit"]
     assert audit["decision_source"] in ("claude", "fallback") and "Internal error" not in audit["observed_barrier"]
     assert "news:20261024-F1" in agent._news_items(new)
+
+
+def test_concession_path_never_lifts_us_above_a_cheaper_rival(world):
+    """Live P05: the path lifted our counter at Fuchsreiter to 30.02 while Dralveck stood at 29.00,
+    and Fuchsreiter's 'agreed' was taken. The floor stops at the rival's live C (never below our
+    previous counter)."""
+    from hollerau.envelope import envelope, safe_cost
+
+    cases, pkg = world
+    case, sup = cases["case:P07"], "sup:70610"
+    events = _threads("P07")[sup][:3]
+    agent = HollerauAgent(StandIn(_reply(sup, "x", 5.45, {})), pkg)
+    agent.state = agent._prepare_case(case)
+    te = envelope(case, {sup: events}, [sup], agent.state["protocols"], pkg, agent.state["countries"])["threads"][sup]
+    free, prev = agent._min_counter_c(case, events, te)
+    c_prev = safe_cost(case, prev, te["standard"])
+    rival = c_prev + (free - c_prev) / 2  # a rival cheaper than the path's step
+    capped, _ = agent._min_counter_c(case, events, te, rival)
+    assert abs(capped - (rival - 0.01)) < 0.02 and capped < free
+    below, _ = agent._min_counter_c(case, events, te, c_prev - 1000.0)  # rival below our own counter
+    assert abs(below - c_prev) < 0.01  # hold, never retract

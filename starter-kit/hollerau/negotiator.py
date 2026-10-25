@@ -429,12 +429,19 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
                     return terms
         return None
 
+    @staticmethod
+    def _rival_c(env: Envelope, sid: str) -> float | None:
+        """The cheapest live standing sheet of the other suppliers (RFQ), None alone."""
+        others = [x["c_standing"] for k, x in env["threads"].items() if k != sid and x["c_standing"] is not None]
+        return min(others) if others else None
+
     def _min_counter_c(
-        self, case: JSONObject, events: list[Message], te: ThreadEnvelope
+        self, case: JSONObject, events: list[Message], te: ThreadEnvelope, rival_c: float | None = None
     ) -> tuple[float, JSONObject] | None:
         """(the least C our next counter may cost us, our previous counter's terms): our previous C
         plus a shrinking share of the gap to the supplier's standing sheet - in C, so any package
-        shape compares. None before our first counter or without a gap."""
+        shape compares. In an RFQ never above a rival's live offer (live P05: the path lifted us to
+        30.02 at Fuchsreiter while Dralveck stood at 29.00). None before our first counter."""
         cfg = config()["concession_path"]
         prev = self._previous_counter(events)
         standing = te["c_standing"]
@@ -450,7 +457,10 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         theirs = [safe_cost(case, t, te["standard"]) for _, t in supplier_sheets(events)]
         if len(theirs) >= 2 and theirs[-1] > theirs[-2] - cfg["moved_min_pct"] / 100 * abs(theirs[-2]):
             share = 0.0
-        return c_prev + max(standing - c_prev, 0.0) * share, prev
+        floor = c_prev + max(standing - c_prev, 0.0) * share
+        if rival_c is not None:
+            floor = min(floor, max(c_prev, rival_c - 0.01))  # the competition is our move; never retract
+        return floor, prev
 
     def _pace(self, case: JSONObject, d: JSONObject, env: Envelope, threads: Threads) -> None:
         """Arena rule: 'no concession without a move from you'. Every counter concedes at least the
@@ -463,7 +473,7 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         if te is None or not isinstance(msg, dict) or msg.get("action") or not msg.get("term_sheets"):
             return
         events = threads.get(sid, [])
-        got = self._min_counter_c(case, events, te)
+        got = self._min_counter_c(case, events, te, self._rival_c(env, sid))
         if got is None or te["c_standing"] is None:
             return
         floor, prev = got
@@ -644,13 +654,13 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
             if silenced and not last_move:
                 continue
             target = te["c_target"]
-            if status == "final_offer":
-                if cheapest_live is not None and c > cheapest_live + 0.01:
-                    continue  # another supplier is cheaper: keep negotiating there
-            elif status != "agreed" and tel[sid]["moves_left"] > 1 and (target is None or c > target):
-                continue
-            elif self._partial_negotiable(case, te) and tel[sid]["moves_left"] > 1:
-                continue  # demand full coverage first (strong_factors_plus.txt: reject partial offers)
+            if status in ("final_offer", "agreed") and cheapest_live is not None and c > cheapest_live + 0.01:
+                continue  # another supplier is cheaper: keep negotiating there (live P05: agreed at 30.02 vs 29.00)
+            if status != "final_offer":
+                if status != "agreed" and tel[sid]["moves_left"] > 1 and (target is None or c > target):
+                    continue
+                if self._partial_negotiable(case, te) and tel[sid]["moves_left"] > 1:
+                    continue  # demand full coverage first (strong_factors_plus.txt: reject partial offers)
             if (alt is not None and c >= alt) or (c_open is not None and c >= c_open):
                 continue
             if not must_haves_ok(case, terms, te["standard"]):
@@ -825,7 +835,7 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
                     "CASH-SHORT supplier (Sunday release: credit cut / lost customer / payment letter): fast payment "
                     "and firm volume are worth more to it than price - keep the TARGET's short payment term."
                 )
-            paced = self._min_counter_c(case, threads[sid], te)
+            paced = self._min_counter_c(case, threads[sid], te, self._rival_c(env, sid))
             if paced is not None and te["target_terms"] is not None and te["c_standing"] is not None:
                 floor, prev = paced
                 at_target = price_for_cost(
@@ -944,7 +954,7 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
                 must = next((s for s in found if s["field"] in asked), found[0])
                 # a forced trade obeys the concession guard too (live P11: a swap priced off the
                 # supplier's 50.00 jumped our counter 43.90 -> 48.99, accepted at once: 0.15)
-                cap = self._counter_cap(case, events, te, tel[sid], env["progress"])
+                cap = self._counter_cap(case, events, te, tel[sid], env["progress"], self._rival_c(env, sid))
                 if cap is None or must["c_true"] <= cap:
                     self.mandatory[sid] = must
                 else:
@@ -1062,7 +1072,7 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
                 c = safe_cost(case, terms, te["standard"], te["supplier_estimate"])
                 if te["c_true_standing"] is None or c < te["c_true_standing"]:
                     kept.append({**cast(JSONObject, s), "terms": terms})
-            allowance = self._counter_cap(case, threads.get(sid, []), te, t, env["progress"])
+            allowance = self._counter_cap(case, threads.get(sid, []), te, t, env["progress"], self._rival_c(env, sid))
             if allowance is not None and kept:
                 within: list[JSONValue] = []
                 for x in kept:
@@ -1137,12 +1147,18 @@ class HollerauAgent(LLMAgent):  # upstream LLMAgent is unannotated: super() call
         return {"supplier_id": sid, "message": {"action": {"type": "walk_away"}}}
 
     def _counter_cap(
-        self, case: JSONObject, events: list[Message], te: ThreadEnvelope, t: Telemetry, progress: float
+        self,
+        case: JSONObject,
+        events: list[Message],
+        te: ThreadEnvelope,
+        t: Telemetry,
+        progress: float,
+        rival_c: float | None = None,
     ) -> float | None:
         """The dearest C any counter-sheet may have now: the concession guard, widened so it never
         forbids the concession path (Claude may concede up to twice the path's minimum step)."""
         allowance = self._concession_allowance(te, t, progress)
-        paced = self._min_counter_c(case, events, te)
+        paced = self._min_counter_c(case, events, te, rival_c)
         if allowance is not None and paced is not None:
             c_prev = safe_cost(case, paced[1], te["standard"])
             allowance = max(allowance, paced[0] + (paced[0] - c_prev))
